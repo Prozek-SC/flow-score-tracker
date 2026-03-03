@@ -1,0 +1,12 @@
+requests==2.31.0
+python-dotenv==1.0.0
+supabase==2.3.0
+schedule==1.2.1
+pandas==2.1.4
+numpy==1.26.2
+pytz==2023.3
+finvizfinance==0.14.1
+apscheduler==3.10.4
+flask==3.0.0
+flask-cors==4.0.0
+gunicorn==21.2.0
