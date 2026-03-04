@@ -38,7 +38,7 @@ class AlphaVantageClient:
         params = {
             "function": "TIME_SERIES_DAILY",
             "symbol": symbol,
-            "outputsize": "full" if bars_back > 100 else "compact",
+            "outputsize": "compact",
             "apikey": self.api_key,
         }
 
