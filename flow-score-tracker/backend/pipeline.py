@@ -80,7 +80,7 @@ def get_ici_fund_flows() -> dict:
 # SECTOR SCORING
 # ============================================================
 
-def score_all_sectors(finviz: FinvizClient, ts_client: TradeStationClient,
+def score_all_sectors(finviz: FinvizClient, ts_client: AlphaVantageClient,
                        equity_flow: float, equity_avg: float) -> list:
     """Score all 11 sector ETFs and return ranked list"""
     etf_tickers = list(SECTOR_ETFS.values())
@@ -191,7 +191,7 @@ def run_weekly_flow_score():
             try:
                 bars = ts_client.get_bars(ticker, bars_back=200)
             except Exception as e:
-                print(f"    TradeStation error: {e}")
+                print(f"    AlphaVantage error: {e}")
 
             fv = fv_batch.get(ticker, {})
             price = fv.get("price", 0)
