@@ -85,7 +85,11 @@ def add_ticker():
     if not ticker:
         return jsonify({"error": "Ticker required"}), 400
     sb = get_sb()
-    sb.table("watchlist").upsert({"ticker": ticker, "sector": sector, "active": True}).execute()
+    existing = sb.table("watchlist").select("*").eq("ticker", ticker).execute()
+    if existing.data:
+        sb.table("watchlist").update({"active": True, "sector": sector}).eq("ticker", ticker).execute()
+    else:
+        sb.table("watchlist").insert({"ticker": ticker, "sector": sector, "active": True}).execute()
     return jsonify({"success": True, "ticker": ticker})
 
 @app.route("/api/watchlist/<ticker>", methods=["DELETE"])
