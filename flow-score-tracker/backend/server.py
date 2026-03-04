@@ -237,20 +237,26 @@ def add_fund_flow():
 
 @app.route("/api/scan/weekly", methods=["POST"])
 def trigger_weekly():
-    try:
-        results = run_weekly_flow_score()
-        send_weekly_report(results)
-        return jsonify({"success": True, "tickers": len(results)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    import threading
+    def run():
+        try:
+            results = run_weekly_flow_score()
+            send_weekly_report(results)
+        except Exception as e:
+            print(f"Weekly scan error: {e}")
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"success": True, "message": "Weekly scan started in background"})
 
 @app.route("/api/scan/daily", methods=["POST"])
 def trigger_daily():
-    try:
-        run_daily_price_update()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    import threading
+    def run():
+        try:
+            run_daily_price_update()
+        except Exception as e:
+            print(f"Daily scan error: {e}")
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"success": True, "message": "Daily scan started in background"})
 
 
 # ============================================================
