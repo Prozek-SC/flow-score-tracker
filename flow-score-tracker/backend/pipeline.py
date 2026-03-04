@@ -10,7 +10,7 @@ from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 from supabase import create_client
 
-from tradestation_client import TradeStationClient
+from alphavantage_client import AlphaVantageClient
 from data_clients import FinvizClient, TradierOptionsClient
 from scoring_engine import (
     score_capital_flow_level1, score_capital_flow_level2,
@@ -139,7 +139,7 @@ def run_weekly_flow_score():
     """
     print(f"[{datetime.now()}] Running WEEKLY Flow Score...")
     sb = get_supabase()
-    ts_client = TradeStationClient()
+    ts_client = AlphaVantageClient()
     finviz = FinvizClient()
     uw = TradierOptionsClient()
 
@@ -266,7 +266,7 @@ def run_daily_price_update():
     """
     print(f"[{datetime.now()}] Running daily price update...")
     sb = get_supabase()
-    ts_client = TradeStationClient()
+    ts_client = AlphaVantageClient()
     finviz = FinvizClient()
 
     watchlist = get_watchlist(sb)
