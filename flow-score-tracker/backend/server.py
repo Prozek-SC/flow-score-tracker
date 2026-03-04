@@ -57,6 +57,15 @@ scheduler.start()
 def health():
     return jsonify({"status": "ok", "time": datetime.now(ET).isoformat()})
 
+@app.route("/api/debug")
+def debug():
+    try:
+        sb = get_sb()
+        result = sb.table("watchlist").select("ticker").limit(1).execute()
+        return jsonify({"supabase": "ok", "data": result.data})
+    except Exception as e:
+        return jsonify({"supabase": "error", "message": str(e)}), 500
+
 
 # ============================================================
 # WATCHLIST
