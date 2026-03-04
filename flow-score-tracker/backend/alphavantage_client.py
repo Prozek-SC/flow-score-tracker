@@ -49,6 +49,7 @@ class AlphaVantageClient:
 
             ts = data.get("Time Series (Daily)", {})
             if not ts:
+                print(f"    AlphaVantage no data for {symbol}: {data}")
                 return []
 
             bars = []
