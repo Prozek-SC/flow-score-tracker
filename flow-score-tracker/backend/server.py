@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from supabase import create_client
 
 from pipeline import run_weekly_flow_score, run_daily_price_update, get_ici_fund_flows
+from scanner import run_scanner
 from email_report import send_weekly_report, send_daily_price_alert
 
 load_dotenv()
@@ -266,6 +267,37 @@ def trigger_daily():
 # ============================================================
 # CSV EXPORT
 # ============================================================
+
+
+
+# ============================================================
+# SCANNER
+# ============================================================
+
+@app.route("/api/scanner/run", methods=["POST"])
+def trigger_scanner():
+    import threading
+    def _run():
+        try:
+            run_scanner()
+        except Exception as e:
+            print(f"Scanner error: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"success": True, "message": "Scanner started in background"})
+
+
+@app.route("/api/scanner/results")
+def get_scanner_results():
+    sb = get_sb()
+    try:
+        result = sb.table("scanner_results").select("*").order("run_date", desc=True).limit(1).execute()
+        if result.data:
+            row = result.data[0]
+            data = json.loads(row["results"]) if isinstance(row["results"], str) else row["results"]
+            return jsonify({"success": True, "data": data, "run_date": row["run_date"]})
+        return jsonify({"success": False, "message": "No scanner results yet"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/export/scores")
 def export_scores():
