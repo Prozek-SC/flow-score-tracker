@@ -13,9 +13,9 @@ from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 from supabase import create_client
 
-from pipeline import run_weekly_flow_score, run_daily_price_update, get_ici_fund_flows
+from pipeline import run_weekly_flow_score, run_daily_price_update, get_ici_fund_flows, score_tickers
 from scanner import run_scanner
-from email_report import send_weekly_report, send_daily_price_alert
+from email_report import send_weekly_report, send_daily_price_alert, send_scanner_report
 
 load_dotenv()
 
@@ -42,11 +42,45 @@ def daily_job():
     run_daily_price_update()
     send_daily_price_alert()
 
+def scanner_job():
+    print(f"[SCHEDULER] Morning scanner — {datetime.now(ET)}")
+    try:
+        results = run_scanner()
+
+        # Score top 10 stocks across all sectors by RS vs ETF
+        sector_stocks = results.get("sector_stocks", {})
+        top_sectors = results.get("top_sectors", [])
+        all_candidates = []
+        for sector_data in top_sectors:
+            sname = sector_data["sector"]
+            stocks = sector_stocks.get(sname, [])
+            for s in stocks:
+                all_candidates.append({"ticker": s["ticker"], "sector": sname, "rs": s.get("rs_vs_etf", 0)})
+
+        # Sort by RS and take top 10
+        top10 = sorted(all_candidates, key=lambda x: x["rs"], reverse=True)[:10]
+        if top10:
+            print(f"  Scoring top 10: {[t['ticker'] for t in top10]}")
+            scored = score_tickers(top10)
+            # Merge scores back into results for the email
+            score_map = {r["ticker"]: r for r in scored}
+            for sname, stocks in sector_stocks.items():
+                for stock in stocks:
+                    if stock["ticker"] in score_map:
+                        stock["flow_score"] = score_map[stock["ticker"]].get("flow_score")
+                        stock["rating"] = score_map[stock["ticker"]].get("rating")
+
+        send_scanner_report(results)
+    except Exception as e:
+        print(f"  Scanner job error: {e}")
+
 scheduler = BackgroundScheduler(timezone=ET)
 # Weekly: Friday at 5:00 PM ET (after market close)
 scheduler.add_job(weekly_job, CronTrigger(day_of_week="fri", hour=17, minute=0, timezone=ET))
 # Daily: 7:00 AM ET weekdays
 scheduler.add_job(daily_job, CronTrigger(day_of_week="mon-fri", hour=7, minute=0, timezone=ET))
+# Scanner: 7:05 AM ET weekdays (runs after daily price update)
+scheduler.add_job(scanner_job, CronTrigger(day_of_week="mon-fri", hour=7, minute=5, timezone=ET))
 scheduler.start()
 
 
