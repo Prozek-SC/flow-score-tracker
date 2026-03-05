@@ -6,6 +6,10 @@ const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
 // ============================================================
 // UTILITIES
 // ============================================================
+function tvLink(ticker) {
+  return `https://www.tradingview.com/chart/?symbol=${ticker}`;
+}
+
 function scoreColor(score) {
   if (score >= 80) return "#00d4aa";
   if (score >= 65) return "#7fff7f";
@@ -66,18 +70,22 @@ function ScoreRing({ score, grade }) {
 function SignalBar({ label, score, detail, weight }) {
   const color = scoreColor(score);
   return (
-    <div style={{ marginBottom: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-        <span style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>
-          {label} <span style={{ color: "#444" }}>·{weight}%</span>
+    <div style={{ marginBottom: 10, padding: "10px 12px", background: "#070714",
+      borderRadius: 6, border: "1px solid #1a1a2e" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <span style={{ fontSize: 12, color: "#ccc", letterSpacing: 1, fontWeight: 600 }}>
+          {label}
+          <span style={{ color: "#666", fontSize: 10, marginLeft: 6 }}>·{weight}%</span>
         </span>
-        <span style={{ fontSize: 11, color, fontWeight: 700, fontFamily: "monospace" }}>{score}</span>
+        <span style={{ fontSize: 20, color, fontWeight: 900, fontFamily: "monospace",
+          textShadow: `0 0 10px ${color}88` }}>{score}</span>
       </div>
-      <div style={{ background: "#0a0a18", borderRadius: 3, height: 6, overflow: "hidden" }}>
-        <div style={{ background: color, width: `${score}%`, height: "100%", borderRadius: 3,
-          transition: "width 0.6s ease", boxShadow: `0 0 6px ${color}44` }} />
+      <div style={{ background: "#0a0a18", borderRadius: 4, height: 8, overflow: "hidden" }}>
+        <div style={{ background: `linear-gradient(90deg, ${color}88, ${color})`,
+          width: `${score}%`, height: "100%", borderRadius: 4,
+          transition: "width 0.6s ease", boxShadow: `0 0 8px ${color}66` }} />
       </div>
-      {detail && <div style={{ fontSize: 9, color: "#555", marginTop: 2 }}>{detail}</div>}
+      {detail && <div style={{ fontSize: 10, color: "#aaa", marginTop: 5 }}>{detail}</div>}
     </div>
   );
 }
@@ -105,7 +113,13 @@ function TickerCard({ data, onClick, isSelected }) {
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
         <ScoreRing score={flow_score || 0} grade={rating || "F"} />
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 22, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{ticker}</div>
+          <a href={tvLink(ticker)} target="_blank" rel="noreferrer"
+            style={{ fontSize: 22, fontWeight: 900, color: "#00d4aa", fontFamily: "monospace",
+              textDecoration: "none", display: "block" }}
+            onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
+            onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
+            {ticker} ↗
+          </a>
           <div style={{ fontSize: 13, color: "#888" }}>${fmt(price, 2)}</div>
           <div style={{ display: "inline-block", marginTop: 6, padding: "2px 8px",
             background: `${gradeColor(rating)}22`, borderRadius: 4,
@@ -130,7 +144,7 @@ function HistoryChart({ ticker }) {
     fetch(`${API_BASE}/api/scores/history/${ticker}`).then(r => r.json()).then(setHistory).catch(() => {});
   }, [ticker]);
   if (!history.length) return (
-    <div style={{ color: "#444", textAlign: "center", padding: 32, fontSize: 12 }}>No history yet</div>
+    <div style={{ color: "#888", textAlign: "center", padding: 32, fontSize: 12 }}>No history yet</div>
   );
   return (
     <ResponsiveContainer width="100%" height={200}>
@@ -161,7 +175,7 @@ function SectorCard({ sector, isSelected, onClick }) {
       onMouseLeave={e => e.currentTarget.style.borderColor = isSelected ? "#00d4aa44" : "#1a1a2e"}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <div style={{ fontSize: 11, color: "#555", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>
+          <div style={{ fontSize: 11, color: "#aaa", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>
             {sector.etf}
           </div>
           <div style={{ fontSize: 18, fontWeight: 900, color: "#fff" }}>{sector.sector}</div>
@@ -177,25 +191,25 @@ function SectorCard({ sector, isSelected, onClick }) {
       </div>
       <div style={{ display: "flex", gap: 20, marginTop: 16 }}>
         <div>
-          <div style={{ fontSize: 9, color: "#444", letterSpacing: 1 }}>PRICE</div>
+          <div style={{ fontSize: 9, color: "#888", letterSpacing: 1 }}>PRICE</div>
           <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: "#fff" }}>
             ${fmt(sector.price, 2)}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: "#444", letterSpacing: 1 }}>200MA</div>
+          <div style={{ fontSize: 9, color: "#888", letterSpacing: 1 }}>200MA</div>
           <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: "#888" }}>
             ${fmt(sector.ma200, 2)}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: "#444", letterSpacing: 1 }}>3M PERF</div>
+          <div style={{ fontSize: 9, color: "#888", letterSpacing: 1 }}>3M PERF</div>
           <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: perfColor(sector.perf_3m) }}>
             {sector.perf_3m > 0 ? "+" : ""}{fmt(sector.perf_3m)}%
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: "#444", letterSpacing: 1 }}>1M PERF</div>
+          <div style={{ fontSize: 9, color: "#888", letterSpacing: 1 }}>1M PERF</div>
           <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: perfColor(sector.perf_1m) }}>
             {sector.perf_1m > 0 ? "+" : ""}{fmt(sector.perf_1m)}%
           </div>
@@ -208,36 +222,50 @@ function SectorCard({ sector, isSelected, onClick }) {
 function StockRow({ stock, rank, sector, onAdd, added }) {
   const rsColor = perfColor(stock.rs_vs_etf);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "32px 80px 1fr 80px 80px 80px 80px 60px 80px",
+    <div style={{ display: "grid", gridTemplateColumns: "32px 80px 1fr 60px 80px 80px 80px 80px 60px 80px",
       gap: 12, padding: "12px 16px", borderBottom: "1px solid #0f0f1e",
       alignItems: "center", transition: "background 0.15s" }}
       onMouseEnter={e => e.currentTarget.style.background = "#0a0a18"}
       onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-      <div style={{ fontSize: 11, color: "#444", fontFamily: "monospace" }}>{rank}</div>
+      <div style={{ fontSize: 11, color: "#888", fontFamily: "monospace" }}>{rank}</div>
       <div>
-        <div style={{ fontSize: 14, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{stock.ticker}</div>
-        <div style={{ fontSize: 9, color: "#555", marginTop: 1 }}>${fmt(stock.price, 2)}</div>
+        <a href={tvLink(stock.ticker)} target="_blank" rel="noreferrer"
+          style={{ fontSize: 14, fontWeight: 900, color: "#00d4aa", fontFamily: "monospace",
+            textDecoration: "none" }}
+          onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
+          onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
+          {stock.ticker} ↗
+        </a>
+        <div style={{ fontSize: 9, color: "#aaa", marginTop: 1 }}>${fmt(stock.price, 2)}</div>
       </div>
       <div style={{ fontSize: 11, color: "#666", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
         {stock.name}
+      </div>
+      <div style={{ textAlign: "center" }}>
+        {stock.flow_score != null ? (
+          <div style={{ fontSize: 13, fontWeight: 900, fontFamily: "monospace",
+            color: scoreColor(stock.flow_score) }}>{fmt(stock.flow_score, 0)}</div>
+        ) : (
+          <div style={{ fontSize: 10, color: "#555" }}>—</div>
+        )}
       </div>
       <div style={{ textAlign: "right" }}>
         <div style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace", color: rsColor }}>
           {stock.rs_vs_etf > 0 ? "+" : ""}{fmt(stock.rs_vs_etf)}%
         </div>
-        <div style={{ fontSize: 9, color: "#444" }}>RS vs ETF</div>
+        <div style={{ fontSize: 9, color: "#888" }}>RS vs ETF</div>
       </div>
       <div style={{ textAlign: "right" }}>
         <div style={{ fontSize: 12, fontFamily: "monospace", color: perfColor(stock.perf_3m) }}>
           {stock.perf_3m > 0 ? "+" : ""}{fmt(stock.perf_3m)}%
         </div>
-        <div style={{ fontSize: 9, color: "#444" }}>3M</div>
+        <div style={{ fontSize: 9, color: "#888" }}>3M</div>
       </div>
       <div style={{ textAlign: "right" }}>
         <div style={{ fontSize: 12, fontFamily: "monospace", color: perfColor(stock.perf_1m) }}>
           {stock.perf_1m > 0 ? "+" : ""}{fmt(stock.perf_1m)}%
         </div>
-        <div style={{ fontSize: 9, color: "#444" }}>1M</div>
+        <div style={{ fontSize: 9, color: "#888" }}>1M</div>
       </div>
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 10, fontWeight: 700,
@@ -249,7 +277,7 @@ function StockRow({ stock, rank, sector, onAdd, added }) {
       </div>
       <div style={{ textAlign: "right" }}>
         <div style={{ fontSize: 11, fontFamily: "monospace", color: "#888" }}>${fmt(stock.mktcap_b, 1)}B</div>
-        <div style={{ fontSize: 9, color: "#444" }}>MKTCAP</div>
+        <div style={{ fontSize: 9, color: "#888" }}>MKTCAP</div>
       </div>
       <div style={{ textAlign: "center" }}>
         <button
@@ -276,7 +304,7 @@ function UnusualActivityBadge({ item }) {
         {item.ticker}
       </div>
       <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 10, color: "#555" }}>
+        <div style={{ fontSize: 10, color: "#aaa" }}>
           Vol: {item.total_volume?.toLocaleString()} · OI: {item.total_oi?.toLocaleString()}
         </div>
       </div>
@@ -292,21 +320,19 @@ function UnusualActivityBadge({ item }) {
   );
 }
 
-function ScannerTab() {
+function ScannerTab({ watchlistTickers = new Set(), onWatchlistChange }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [selectedSector, setSelectedSector] = useState(null);
   const [lastRun, setLastRun] = useState(null);
-  const [addedTickers, setAddedTickers] = useState({});
-
   const addToWatchlist = async (ticker, sector) => {
     try {
       await fetch(`${API_BASE}/api/watchlist`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ticker, sector: sector || "" })
       });
-      setAddedTickers(prev => ({ ...prev, [ticker]: true }));
+      if (onWatchlistChange) onWatchlistChange();
     } catch (e) { console.error(e); }
   };
 
@@ -344,11 +370,11 @@ function ScannerTab() {
       {/* Scanner header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <div>
-          <div style={{ fontSize: 11, color: "#555", letterSpacing: 2, textTransform: "uppercase" }}>
+          <div style={{ fontSize: 11, color: "#aaa", letterSpacing: 2, textTransform: "uppercase" }}>
             Market Scanner
           </div>
           {lastRun && (
-            <div style={{ fontSize: 10, color: "#444", marginTop: 4 }}>
+            <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>
               Last run: {new Date(lastRun).toLocaleString()}
             </div>
           )}
@@ -366,8 +392,8 @@ function ScannerTab() {
 
       {!loading && !data && (
         <div style={{ textAlign: "center", padding: 80 }}>
-          <div style={{ fontSize: 14, color: "#555", marginBottom: 16 }}>No scanner results yet</div>
-          <div style={{ fontSize: 11, color: "#444", marginBottom: 24 }}>Click "Run Scanner" to find top sectors and stocks</div>
+          <div style={{ fontSize: 14, color: "#aaa", marginBottom: 16 }}>No scanner results yet</div>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 24 }}>Click "Run Scanner" to find top sectors and stocks</div>
           <button onClick={runScan} style={btnStyle("#00d4aa", "#000")}>▶ Run Scanner</button>
         </div>
       )}
@@ -376,7 +402,7 @@ function ScannerTab() {
         <div style={{ display: "grid", gridTemplateColumns: unusual.length > 0 ? "1fr 280px" : "1fr", gap: 24 }}>
           <div>
             {/* Top sectors */}
-            <div style={{ fontSize: 11, color: "#555", letterSpacing: 2, marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: "#aaa", letterSpacing: 2, marginBottom: 12 }}>
               TOP SECTORS — ABOVE 200MA
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12, marginBottom: 28 }}>
@@ -391,28 +417,28 @@ function ScannerTab() {
             {selectedSector && (
               <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                  <div style={{ fontSize: 11, color: "#555", letterSpacing: 2 }}>
+                  <div style={{ fontSize: 11, color: "#aaa", letterSpacing: 2 }}>
                     TOP 25 — {selectedSector.toUpperCase()} · RANKED BY RS vs ETF
                   </div>
-                  <div style={{ fontSize: 10, color: "#444" }}>{stocks.length} stocks</div>
+                  <div style={{ fontSize: 10, color: "#888" }}>{stocks.length} stocks</div>
                 </div>
 
                 <div style={{ background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 8, overflow: "hidden" }}>
                   {/* Table header */}
-                  <div style={{ display: "grid", gridTemplateColumns: "32px 80px 1fr 80px 80px 80px 80px 60px 80px",
+                  <div style={{ display: "grid", gridTemplateColumns: "32px 80px 1fr 60px 80px 80px 80px 80px 60px 80px",
                     gap: 12, padding: "10px 16px", borderBottom: "1px solid #1a1a2e",
                     background: "#0d0d1a" }}>
-                    {["#", "TICKER", "NAME", "RS vs ETF", "3M", "1M", "MA", "MKTCAP", ""].map(h => (
-                      <div key={h} style={{ fontSize: 9, color: "#444", letterSpacing: 1,
+                    {["#", "TICKER", "NAME", "SCORE", "RS vs ETF", "3M", "1M", "MA", "MKTCAP", ""].map(h => (
+                      <div key={h} style={{ fontSize: 9, color: "#888", letterSpacing: 1,
                         textAlign: ["RS vs ETF", "3M", "1M", "MKTCAP"].includes(h) ? "right" : "center" === h ? "center" : "left" }}>
                         {h}
                       </div>
                     ))}
                   </div>
                   {stocks.length === 0 ? (
-                    <div style={{ padding: 32, textAlign: "center", color: "#444", fontSize: 12 }}>No stocks found</div>
+                    <div style={{ padding: 32, textAlign: "center", color: "#888", fontSize: 12 }}>No stocks found</div>
                   ) : (
-                    stocks.map((s, i) => <StockRow key={s.ticker} stock={s} rank={i + 1} sector={selectedSector} onAdd={addToWatchlist} added={!!addedTickers[s.ticker]} />)
+                    stocks.map((s, i) => <StockRow key={s.ticker} stock={s} rank={i + 1} sector={selectedSector} onAdd={addToWatchlist} added={watchlistTickers.has(s.ticker)} />)
                   )}
                 </div>
               </>
@@ -422,11 +448,11 @@ function ScannerTab() {
           {/* Unusual activity panel */}
           {unusual.length > 0 && (
             <div>
-              <div style={{ fontSize: 11, color: "#555", letterSpacing: 2, marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: "#aaa", letterSpacing: 2, marginBottom: 12 }}>
                 ⚡ UNUSUAL OPTIONS ACTIVITY
               </div>
               <div style={{ background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 8, padding: 16 }}>
-                <div style={{ fontSize: 10, color: "#444", marginBottom: 12, lineHeight: 1.6 }}>
+                <div style={{ fontSize: 10, color: "#888", marginBottom: 12, lineHeight: 1.6 }}>
                   Vol/OI ratio {'>'} 2.0 · New money signal
                 </div>
                 {unusual.map(item => <UnusualActivityBadge key={item.ticker} item={item} />)}
@@ -517,7 +543,7 @@ export default function App() {
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           {lastUpdated && (
-            <div style={{ fontSize: 10, color: "#444", marginRight: 8 }}>
+            <div style={{ fontSize: 10, color: "#888", marginRight: 8 }}>
               Updated {lastUpdated.toLocaleTimeString()}
             </div>
           )}
@@ -553,8 +579,8 @@ export default function App() {
             )}
             {!loading && scores.length === 0 && (
               <div style={{ textAlign: "center", padding: 80 }}>
-                <div style={{ fontSize: 14, color: "#555", marginBottom: 16 }}>No scores yet</div>
-                <div style={{ fontSize: 11, color: "#444", marginBottom: 24 }}>Add tickers to watchlist, then run a scan</div>
+                <div style={{ fontSize: 14, color: "#aaa", marginBottom: 16 }}>No scores yet</div>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 24 }}>Add tickers to watchlist, then run a scan</div>
                 <button onClick={() => setTab("watchlist")} style={btnStyle("#00d4aa", "#000")}>Add Tickers →</button>
               </div>
             )}
@@ -574,9 +600,9 @@ export default function App() {
                         <div style={{ fontSize: 10, color: "#00d4aa", letterSpacing: 3, textTransform: "uppercase" }}>Detail View</div>
                         <div style={{ fontSize: 22, fontWeight: 900, color: "#fff" }}>{selectedTicker.ticker}</div>
                       </div>
-                      <button onClick={() => setSelectedTicker(null)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 18 }}>✕</button>
+                      <button onClick={() => setSelectedTicker(null)} style={{ background: "none", border: "none", color: "#aaa", cursor: "pointer", fontSize: 18 }}>✕</button>
                     </div>
-                    <div style={{ fontSize: 11, color: "#555", marginBottom: 12, letterSpacing: 2, textTransform: "uppercase" }}>Score History</div>
+                    <div style={{ fontSize: 11, color: "#aaa", marginBottom: 12, letterSpacing: 2, textTransform: "uppercase" }}>Score History</div>
                     <HistoryChart ticker={selectedTicker.ticker} />
                   </div>
                 )}
@@ -586,13 +612,13 @@ export default function App() {
         )}
 
         {/* SCANNER TAB */}
-        {tab === "scanner" && <ScannerTab />}
+        {tab === "scanner" && <ScannerTab watchlistTickers={new Set(watchlist.map(w => w.ticker))} onWatchlistChange={fetchWatchlist} />}
 
         {/* WATCHLIST TAB */}
         {tab === "watchlist" && (
           <div style={{ maxWidth: 600 }}>
             <div style={{ marginBottom: 24 }}>
-              <div style={{ fontSize: 11, color: "#555", marginBottom: 12, letterSpacing: 2 }}>ADD TICKER</div>
+              <div style={{ fontSize: 11, color: "#aaa", marginBottom: 12, letterSpacing: 2 }}>ADD TICKER</div>
               <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
                 <input value={newTicker} onChange={e => setNewTicker(e.target.value.toUpperCase())}
                   onKeyDown={e => e.key === "Enter" && addTicker()} placeholder="Ticker (e.g. NVDA)"
@@ -606,15 +632,21 @@ export default function App() {
               </div>
             </div>
             {watchlist.length === 0 && (
-              <div style={{ color: "#444", fontSize: 12, padding: "32px 0" }}>No tickers yet.</div>
+              <div style={{ color: "#888", fontSize: 12, padding: "32px 0" }}>No tickers yet.</div>
             )}
             {watchlist.map(w => (
               <div key={w.ticker} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
                 padding: "14px 16px", background: "#0a0a18", border: "1px solid #1a1a2e",
                 borderRadius: 6, marginBottom: 8 }}>
                 <div>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: "#fff", fontFamily: "monospace" }}>{w.ticker}</span>
-                  {w.sector && <span style={{ fontSize: 11, color: "#555", marginLeft: 12 }}>{w.sector}</span>}
+                  <a href={tvLink(w.ticker)} target="_blank" rel="noreferrer"
+                    style={{ fontSize: 16, fontWeight: 700, color: "#00d4aa", fontFamily: "monospace",
+                      textDecoration: "none" }}
+                    onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
+                    onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
+                    {w.ticker} ↗
+                  </a>
+                  {w.sector && <span style={{ fontSize: 11, color: "#aaa", marginLeft: 12 }}>{w.sector}</span>}
                 </div>
                 <button onClick={() => removeTicker(w.ticker)}
                   style={{ background: "none", border: "1px solid #2a1a1a", borderRadius: 4, color: "#ff4444", cursor: "pointer", padding: "4px 10px", fontSize: 11 }}>
