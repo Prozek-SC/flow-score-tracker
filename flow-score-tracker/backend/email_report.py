@@ -1,7 +1,6 @@
 """
-Flow Score Email Reports
-Weekly full report + Daily price alert
-Sends via Gmail SMTP using an App Password.
+Email Report Generator
+Sends HTML emails via Gmail SMTP (or SendGrid if configured)
 """
 import os
 import smtplib
@@ -12,149 +11,340 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-RATING_COLORS = {
-    "ELITE": "#00ff88",
-    "STRONG": "#7fff7f",
-    "NEUTRAL": "#ffd700",
-    "WEAK": "#ff9944",
-    "TOXIC": "#ff3333",
-}
 
-
-def build_weekly_html(results: list) -> str:
-    today = date.today().strftime("%A, %B %d, %Y")
-    sorted_r = sorted(results, key=lambda x: x.get("flow_score", 0), reverse=True)
-
-    burst_trades = [r for r in sorted_r if r.get("burst", {}).get("is_burst")]
-    flow_trades = [r for r in sorted_r if r.get("flow_score", 0) >= 80 and not r.get("burst", {}).get("is_burst")]
-    watch_list = [r for r in sorted_r if 50 <= r.get("flow_score", 0) < 80]
-    avoid = [r for r in sorted_r if r.get("flow_score", 0) < 50]
-
-    def score_bar(score, max_score=100):
-        pct = score / max_score * 100
-        color = "#00ff88" if pct >= 80 else "#7fff7f" if pct >= 65 else "#ffd700" if pct >= 50 else "#ff4444"
-        return f"""<div style="background:#1a1a2e;border-radius:3px;height:8px;width:120px;display:inline-block;vertical-align:middle;">
-            <div style="background:{color};width:{pct}%;height:8px;border-radius:3px;"></div></div>"""
-
-    def ticker_rows(items, section_label, section_color):
-        if not items:
-            return ""
-        rows = f"""<tr><td colspan="7" style="padding:16px 16px 8px;background:#0a0a18;">
-            <span style="font-size:11px;color:{section_color};letter-spacing:3px;font-weight:700;">{section_label}</span></td></tr>"""
-        for r in items:
-            pillars = r.get("pillars", {})
-            cf = pillars.get("capital_flow", {}).get("score", 0)
-            tr = pillars.get("trend", {}).get("score", 0)
-            mo = pillars.get("momentum", {}).get("score", 0)
-            rating = r.get("rating", "")
-            color = RATING_COLORS.get(rating, "#888")
-            burst = r.get("burst", {})
-            burst_tag = f'<span style="background:#ff6600;color:#000;font-size:9px;padding:2px 6px;border-radius:3px;font-weight:700;margin-left:8px;">⚡ BURST +{burst.get("score_jump",0):.0f}pts</span>' if burst.get("is_burst") else ""
-
-            rows += f"""<tr style="border-bottom:1px solid #0d0d1a;">
-                <td style="padding:12px 16px;font-weight:700;color:#fff;font-size:14px;white-space:nowrap;">{r.get("ticker","")} {burst_tag}</td>
-                <td style="padding:12px 8px;text-align:center;font-size:20px;font-weight:900;color:{color};">{r.get("flow_score",0):.0f}</td>
-                <td style="padding:12px 8px;"><span style="color:{color};font-weight:700;font-size:11px;">{rating}</span></td>
-                <td style="padding:12px 8px;color:#888;font-size:11px;">{score_bar(cf,40)} {cf}/40</td>
-                <td style="padding:12px 8px;color:#888;font-size:11px;">{score_bar(tr,30)} {tr}/30</td>
-                <td style="padding:12px 8px;color:#888;font-size:11px;">{score_bar(mo,30)} {mo}/30</td>
-                <td style="padding:12px 16px;color:#555;font-size:10px;max-width:200px;">{r.get("action","")}</td>
-            </tr>"""
-        return rows
-
-    all_rows = ""
-    if burst_trades:
-        all_rows += ticker_rows(burst_trades, "⚡ BURST TRADE ALERTS", "#ff6600")
-    if flow_trades:
-        all_rows += ticker_rows(flow_trades, "▲ FLOW TRADES (80+ Score)", "#00ff88")
-    if watch_list:
-        all_rows += ticker_rows(watch_list, "◎ WATCHLIST (50-79 Score)", "#ffd700")
-    if avoid:
-        all_rows += ticker_rows(avoid, "✕ AVOID / EXITS", "#ff4444")
-
-    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background:#0d0d1a;font-family:'Courier New',monospace;color:#fff;">
-<div style="max-width:900px;margin:0 auto;padding:32px 16px;">
-
-  <div style="border-bottom:2px solid #00ff88;padding-bottom:24px;margin-bottom:32px;">
-    <div style="font-size:10px;color:#00ff88;letter-spacing:4px;text-transform:uppercase;">Weekly Intelligence Report</div>
-    <div style="font-size:28px;font-weight:900;color:#fff;margin-top:8px;">The Flow Score</div>
-    <div style="color:#888;font-size:12px;margin-top:4px;">{today} · Follow the money.</div>
-  </div>
-
-  {'<div style="background:#1a0a00;border:1px solid #ff6600;border-radius:8px;padding:16px 20px;margin-bottom:24px;"><div style="color:#ff6600;font-weight:700;font-size:13px;margin-bottom:8px;">⚡ ' + str(len(burst_trades)) + ' BURST TRADE SIGNAL' + ('S' if len(burst_trades)>1 else '') + ' THIS WEEK</div><div style="color:#aaa;font-size:11px;">Score jumped 15+ points. Entry: 30-45 DTE · .40-.50 Delta · Never roll · Sell the double.</div></div>' if burst_trades else ""}
-
-  <div style="background:#0a0a18;border:1px solid #1a1a2e;border-radius:8px;overflow:hidden;margin-bottom:32px;">
-    <div style="background:#111128;padding:12px 16px;border-bottom:1px solid #1a1a2e;display:flex;justify-content:space-between;">
-      <span style="color:#00ff88;font-size:11px;letter-spacing:2px;">FLOW SCORE RANKINGS · {len(sorted_r)} TICKERS</span>
-      <span style="color:#444;font-size:10px;">Capital Flow /40 · Trend /30 · Momentum /30</span>
-    </div>
-    <table style="width:100%;border-collapse:collapse;">
-      <thead><tr style="background:#111128;">
-        <th style="padding:10px 16px;text-align:left;color:#555;font-size:10px;font-weight:400;">TICKER</th>
-        <th style="padding:10px 8px;text-align:center;color:#555;font-size:10px;font-weight:400;">SCORE</th>
-        <th style="padding:10px 8px;text-align:left;color:#555;font-size:10px;font-weight:400;">RATING</th>
-        <th style="padding:10px 8px;text-align:left;color:#555;font-size:10px;font-weight:400;">CAPITAL FLOW</th>
-        <th style="padding:10px 8px;text-align:left;color:#555;font-size:10px;font-weight:400;">TREND</th>
-        <th style="padding:10px 8px;text-align:left;color:#555;font-size:10px;font-weight:400;">MOMENTUM</th>
-        <th style="padding:10px 16px;text-align:left;color:#555;font-size:10px;font-weight:400;">ACTION</th>
-      </tr></thead>
-      <tbody>{all_rows}</tbody>
-    </table>
-  </div>
-
-  <div style="text-align:center;color:#333;font-size:10px;letter-spacing:1px;">
-    THE FLOW SCORE · WEEKLY REPORT · NOT FINANCIAL ADVICE
-  </div>
-</div></body></html>"""
-
-
-def _send_gmail(subject: str, html: str):
-    """Send via Gmail SMTP using an App Password."""
-    gmail_user = os.getenv("GMAIL_ADDRESS")
+def _send_email(subject: str, html: str):
+    """Send email via Gmail SMTP."""
+    to_email = os.getenv("REPORT_EMAIL_TO")
+    from_email = os.getenv("REPORT_EMAIL_FROM") or os.getenv("GMAIL_USER")
+    gmail_user = os.getenv("GMAIL_USER")
     gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
-    to_email   = os.getenv("REPORT_EMAIL_TO")
 
-    if not gmail_user or not gmail_pass or not to_email:
-        print("Skipping email — set GMAIL_ADDRESS, GMAIL_APP_PASSWORD, REPORT_EMAIL_TO in env")
+    if not all([to_email, from_email, gmail_user, gmail_pass]):
+        print("Email credentials missing — skipping email")
+        print(f"  REPORT_EMAIL_TO: {to_email}")
+        print(f"  GMAIL_USER: {gmail_user}")
+        print(f"  GMAIL_APP_PASSWORD: {'set' if gmail_pass else 'MISSING'}")
         return
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"]    = f"Flow Score <{gmail_user}>"
-    msg["To"]      = to_email
+    msg["From"] = from_email
+    msg["To"] = to_email
     msg.attach(MIMEText(html, "html"))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(gmail_user, gmail_pass)
-            server.sendmail(gmail_user, to_email, msg.as_string())
-        print(f"Email sent: {subject}")
+            server.sendmail(from_email, to_email, msg.as_string())
+        print(f"  Email sent: {subject}")
     except Exception as e:
-        print(f"Gmail SMTP error: {e}")
+        print(f"  Email error: {e}")
+
+
+def _score_color(score):
+    if score is None:
+        return "#888"
+    if score >= 80: return "#00d4aa"
+    if score >= 65: return "#7fff7f"
+    if score >= 50: return "#ffd700"
+    if score >= 35: return "#ff9944"
+    return "#ff4444"
+
+
+def _perf_color(val):
+    if val is None: return "#888"
+    if val > 5: return "#00d4aa"
+    if val > 0: return "#7fff7f"
+    if val > -5: return "#ff9944"
+    return "#ff4444"
+
+
+def _email_wrapper(title: str, subtitle: str, body_html: str) -> str:
+    today = date.today().strftime("%A, %B %d, %Y")
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#0d0d1a;font-family:'Courier New',monospace;">
+<div style="max-width:900px;margin:0 auto;padding:32px 16px;">
+  <div style="border-bottom:2px solid #00d4aa;padding-bottom:20px;margin-bottom:28px;">
+    <div style="font-size:10px;color:#00d4aa;letter-spacing:4px;text-transform:uppercase;">Flow Score Tracker</div>
+    <div style="font-size:26px;font-weight:900;color:#fff;margin-top:6px;">{title}</div>
+    <div style="color:#888;font-size:12px;margin-top:4px;">{today} · {subtitle}</div>
+  </div>
+  {body_html}
+  <div style="text-align:center;color:#444;font-size:10px;letter-spacing:1px;margin-top:32px;padding-top:16px;border-top:1px solid #1a1a2e;">
+    FLOW SCORE TRACKER · AUTOMATED REPORT · NOT FINANCIAL ADVICE
+  </div>
+</div>
+</body>
+</html>"""
+
+
+# ============================================================
+# SCANNER REPORT
+# ============================================================
+
+def generate_scanner_html(results: dict) -> str:
+    top_sectors = results.get("top_sectors", [])
+    sector_stocks = results.get("sector_stocks", {})
+    unusual = results.get("unusual_activity", [])
+
+    body = ""
+
+    # --- Sector Summary ---
+    if top_sectors:
+        sector_rows = ""
+        for s in top_sectors:
+            color = _perf_color(s.get("pct_from_200ma", 0))
+            sector_rows += f"""
+            <tr style="border-bottom:1px solid #1a1a2e;">
+              <td style="padding:12px 16px;font-weight:900;color:#fff;font-size:15px;">{s['sector']}</td>
+              <td style="padding:12px 16px;color:#888;font-size:12px;">{s['etf']}</td>
+              <td style="padding:12px 16px;text-align:right;font-family:monospace;color:#fff;">${s.get('price',0):.2f}</td>
+              <td style="padding:12px 16px;text-align:right;font-family:monospace;color:{color};font-weight:700;">
+                {'+' if s.get('pct_from_200ma',0) > 0 else ''}{s.get('pct_from_200ma',0):.1f}% vs 200MA
+              </td>
+              <td style="padding:12px 16px;text-align:right;font-family:monospace;color:{_perf_color(s.get('perf_3m',0))};">
+                {'+' if s.get('perf_3m',0) > 0 else ''}{s.get('perf_3m',0):.1f}% (3M)
+              </td>
+            </tr>"""
+
+        body += f"""
+        <div style="background:#0a0a18;border:1px solid #1a1a2e;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+          <div style="background:#111128;padding:12px 16px;border-bottom:1px solid #1a1a2e;">
+            <span style="color:#00d4aa;font-size:11px;letter-spacing:2px;text-transform:uppercase;">
+              ▲ Top Sectors — Above 200MA
+            </span>
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr style="background:#111128;">
+                <th style="padding:10px 16px;text-align:left;color:#888;font-size:10px;font-weight:400;letter-spacing:1px;">SECTOR</th>
+                <th style="padding:10px 16px;text-align:left;color:#888;font-size:10px;font-weight:400;letter-spacing:1px;">ETF</th>
+                <th style="padding:10px 16px;text-align:right;color:#888;font-size:10px;font-weight:400;letter-spacing:1px;">PRICE</th>
+                <th style="padding:10px 16px;text-align:right;color:#888;font-size:10px;font-weight:400;letter-spacing:1px;">vs 200MA</th>
+                <th style="padding:10px 16px;text-align:right;color:#888;font-size:10px;font-weight:400;letter-spacing:1px;">3M PERF</th>
+              </tr>
+            </thead>
+            <tbody>{sector_rows}</tbody>
+          </table>
+        </div>"""
+
+    # --- Top Stocks per Sector ---
+    for sector in top_sectors:
+        sname = sector["sector"]
+        stocks = sector_stocks.get(sname, [])[:15]  # top 15 in email
+        if not stocks:
+            continue
+
+        stock_rows = ""
+        for i, s in enumerate(stocks):
+            rs_color = _perf_color(s.get("rs_vs_etf", 0))
+            score = s.get("flow_score")
+            score_html = (
+                f'<span style="color:{_score_color(score)};font-weight:700;">{score:.0f}</span>'
+                if score is not None else
+                '<span style="color:#555;">—</span>'
+            )
+            ma_color = "#00d4aa" if s.get("above_200ma") else "#ff4444"
+            stock_rows += f"""
+            <tr style="border-bottom:1px solid #0f0f1e;">
+              <td style="padding:10px 16px;color:#888;font-family:monospace;font-size:11px;">{i+1}</td>
+              <td style="padding:10px 16px;">
+                <a href="https://www.tradingview.com/chart/?symbol={s['ticker']}"
+                   style="color:#00d4aa;font-weight:900;font-family:monospace;font-size:13px;text-decoration:none;">
+                  {s['ticker']}
+                </a>
+                <div style="color:#666;font-size:10px;">${s.get('price',0):.2f}</div>
+              </td>
+              <td style="padding:10px 16px;color:#aaa;font-size:11px;">{s.get('name','')[:28]}</td>
+              <td style="padding:10px 16px;text-align:right;font-family:monospace;color:{rs_color};font-weight:700;">
+                {'+' if s.get('rs_vs_etf',0) > 0 else ''}{s.get('rs_vs_etf',0):.1f}%
+              </td>
+              <td style="padding:10px 16px;text-align:right;font-family:monospace;color:{_perf_color(s.get('perf_3m',0))};">
+                {'+' if s.get('perf_3m',0) > 0 else ''}{s.get('perf_3m',0):.1f}%
+              </td>
+              <td style="padding:10px 16px;text-align:center;">
+                <span style="color:{ma_color};font-size:10px;font-weight:700;">
+                  {'▲' if s.get('above_200ma') else '▼'}200
+                </span>
+              </td>
+              <td style="padding:10px 16px;text-align:right;">{score_html}</td>
+            </tr>"""
+
+        body += f"""
+        <div style="background:#0a0a18;border:1px solid #1a1a2e;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+          <div style="background:#111128;padding:12px 16px;border-bottom:1px solid #1a1a2e;">
+            <span style="color:#00d4aa;font-size:11px;letter-spacing:2px;text-transform:uppercase;">
+              {sname} — Top 15 by RS vs ETF
+            </span>
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr style="background:#111128;">
+                <th style="padding:8px 16px;text-align:left;color:#888;font-size:10px;font-weight:400;">#</th>
+                <th style="padding:8px 16px;text-align:left;color:#888;font-size:10px;font-weight:400;">TICKER</th>
+                <th style="padding:8px 16px;text-align:left;color:#888;font-size:10px;font-weight:400;">NAME</th>
+                <th style="padding:8px 16px;text-align:right;color:#888;font-size:10px;font-weight:400;">RS vs ETF</th>
+                <th style="padding:8px 16px;text-align:right;color:#888;font-size:10px;font-weight:400;">3M</th>
+                <th style="padding:8px 16px;text-align:center;color:#888;font-size:10px;font-weight:400;">MA</th>
+                <th style="padding:8px 16px;text-align:right;color:#888;font-size:10px;font-weight:400;">SCORE</th>
+              </tr>
+            </thead>
+            <tbody>{stock_rows}</tbody>
+          </table>
+        </div>"""
+
+    # --- Unusual Options ---
+    if unusual:
+        unusual_rows = ""
+        for u in unusual:
+            color = "#00d4aa" if u.get("bias") == "bullish" else "#ff4444"
+            unusual_rows += f"""
+            <tr style="border-bottom:1px solid #1a1a2e;">
+              <td style="padding:10px 16px;font-weight:900;color:#fff;font-family:monospace;">{u['ticker']}</td>
+              <td style="padding:10px 16px;text-align:right;color:{color};font-weight:700;font-family:monospace;">
+                {u.get('vol_oi_ratio',0):.1f}x Vol/OI
+              </td>
+              <td style="padding:10px 16px;text-align:right;color:#aaa;font-size:11px;">
+                Vol: {u.get('total_volume',0):,} · OI: {u.get('total_oi',0):,}
+              </td>
+              <td style="padding:10px 16px;text-align:center;">
+                <span style="color:{color};font-size:10px;font-weight:700;letter-spacing:1px;">
+                  {u.get('bias','').upper()}
+                </span>
+              </td>
+            </tr>"""
+
+        body += f"""
+        <div style="background:#0a0a18;border:1px solid #1a1a2e;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+          <div style="background:#111128;padding:12px 16px;border-bottom:1px solid #1a1a2e;">
+            <span style="color:#ffd700;font-size:11px;letter-spacing:2px;text-transform:uppercase;">
+              ⚡ Unusual Options Activity
+            </span>
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <tbody>{unusual_rows}</tbody>
+          </table>
+        </div>"""
+
+    return _email_wrapper("Morning Market Scanner", "Pre-Market Analysis", body)
+
+
+def send_scanner_report(results: dict):
+    if not results:
+        print("  No scanner results — skipping email")
+        return
+    today = date.today().strftime("%B %d, %Y")
+    top = [s["sector"] for s in results.get("top_sectors", [])]
+    sector_str = " · ".join(top) if top else "No sectors"
+    html = generate_scanner_html(results)
+    _send_email(f"📊 Morning Scanner — {today} · {sector_str}", html)
+
+
+# ============================================================
+# WEEKLY FLOW SCORE REPORT
+# ============================================================
+
+def generate_weekly_html(results: list) -> str:
+    sorted_results = sorted(results, key=lambda x: x.get("flow_score", 0), reverse=True)
+    rows = ""
+    for r in sorted_results:
+        ticker = r.get("ticker", "")
+        score = r.get("flow_score", 0) or 0
+        rating = r.get("rating", "F")
+        label = r.get("label", "")
+        price = r.get("price", 0) or 0
+        color = _score_color(score)
+        pillars = r.get("pillars", {})
+        if isinstance(pillars, str):
+            import json
+            try: pillars = json.loads(pillars)
+            except: pillars = {}
+
+        pillar_html = ""
+        for key, display in [("capital_flow", "Capital Flow"), ("trend", "Trend"), ("momentum", "Momentum")]:
+            p = pillars.get(key, {})
+            ps = p.get("score", 0)
+            bar_color = _score_color(ps)
+            pillar_html += f"""
+            <tr>
+              <td style="padding:3px 8px;color:#aaa;font-size:11px;width:100px;">{display}</td>
+              <td style="padding:3px 8px;">
+                <div style="background:#1a1a2e;border-radius:3px;height:6px;width:200px;">
+                  <div style="background:{bar_color};width:{ps}%;height:6px;border-radius:3px;"></div>
+                </div>
+              </td>
+              <td style="padding:3px 8px;color:{bar_color};font-size:11px;font-weight:700;font-family:monospace;">{ps}</td>
+            </tr>"""
+
+        rows += f"""
+        <tr style="border-bottom:1px solid #1a1a2e;">
+          <td style="padding:16px;vertical-align:top;">
+            <a href="https://www.tradingview.com/chart/?symbol={ticker}"
+               style="font-size:20px;font-weight:900;color:#00d4aa;text-decoration:none;font-family:monospace;">
+              {ticker} ↗
+            </a>
+            <div style="color:#888;font-size:12px;margin-top:4px;">${price:.2f}</div>
+          </td>
+          <td style="padding:16px;vertical-align:top;text-align:center;min-width:80px;">
+            <div style="font-size:36px;font-weight:900;color:{color};font-family:monospace;">{score:.0f}</div>
+            <div style="font-size:16px;color:{color};font-weight:700;">{rating}</div>
+            <div style="font-size:10px;color:#888;">{label}</div>
+          </td>
+          <td style="padding:16px;vertical-align:top;">
+            <table style="border-collapse:collapse;">{pillar_html}</table>
+          </td>
+        </tr>"""
+
+    body = f"""
+    <div style="background:#0a0a18;border:1px solid #1a1a2e;border-radius:8px;overflow:hidden;">
+      <div style="background:#111128;padding:12px 16px;border-bottom:1px solid #1a1a2e;">
+        <span style="color:#00d4aa;font-size:11px;letter-spacing:2px;text-transform:uppercase;">
+          Flow Scores · {len(sorted_results)} Tickers
+        </span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#111128;">
+            <th style="padding:10px 16px;text-align:left;color:#888;font-size:10px;font-weight:400;letter-spacing:1px;">TICKER</th>
+            <th style="padding:10px 16px;text-align:center;color:#888;font-size:10px;font-weight:400;letter-spacing:1px;">SCORE</th>
+            <th style="padding:10px 16px;text-align:left;color:#888;font-size:10px;font-weight:400;letter-spacing:1px;">PILLARS</th>
+          </tr>
+        </thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+
+    return _email_wrapper("Weekly Flow Score Report", "End of Week Analysis", body)
 
 
 def send_weekly_report(results: list):
     if not results:
-        print("Skipping email — no results")
+        print("  No results — skipping weekly email")
         return
-    burst_count = sum(1 for r in results if r.get("burst", {}).get("is_burst"))
-    subject = f"⚡ BURST ALERT + Flow Score Report — {date.today().strftime('%b %d')}" if burst_count else \
-              f"📊 Weekly Flow Score Report — {date.today().strftime('%b %d, %Y')}"
-    _send_gmail(subject, build_weekly_html(results))
+    today = date.today().strftime("%B %d, %Y")
+    html = generate_weekly_html(results)
+    _send_email(f"📈 Weekly Flow Scores — {today}", html)
 
+
+# ============================================================
+# DAILY PRICE ALERT (stub — kept for compatibility)
+# ============================================================
 
 def send_daily_price_alert():
-    today = date.today().strftime("%A, %B %d, %Y")
-    html = f"""<!DOCTYPE html><html><body style="background:#0d0d1a;font-family:'Courier New',monospace;color:#fff;padding:24px;">
-    <div style="max-width:600px;margin:0 auto;">
-      <div style="font-size:10px;color:#00ff88;letter-spacing:3px;">DAILY PRICE UPDATE</div>
-      <div style="font-size:22px;font-weight:900;margin:8px 0;">Flow Score · Morning Brief</div>
-      <div style="color:#888;font-size:12px;margin-bottom:24px;">{today}</div>
-      <div style="background:#0a0a18;border:1px solid #1a1a2e;border-radius:8px;padding:20px;">
-        <p style="color:#888;font-size:12px;">Daily price data has been refreshed. Visit your dashboard for current MA positions and relative volume.</p>
-        <p style="color:#00ff88;font-size:12px;">Full Flow Score recalculates each Friday after market close.</p>
-      </div>
-      <div style="margin-top:24px;text-align:center;color:#333;font-size:10px;">THE FLOW SCORE · NOT FINANCIAL ADVICE</div>
-    </div></body></html>"""
-    _send_gmail(f"☀ Flow Score Morning Brief — {date.today().strftime('%b %d')}", html)
+    pass  # Can be expanded later
+
+
+if __name__ == "__main__":
+    print("Testing scanner email...")
+    test_results = {
+        "top_sectors": [{"sector": "Energy", "etf": "XLE", "price": 56.19, "ma200": 45.36,
+                          "pct_from_200ma": 23.87, "perf_3m": 22.44, "perf_1m": 12.16, "above_200ma": True}],
+        "sector_stocks": {"Energy": [
+            {"ticker": "CLMT", "name": "Calumet Inc", "price": 29.32, "rs_vs_etf": 26.02,
+             "perf_3m": 48.46, "perf_1m": 33.09, "above_200ma": True, "flow_score": 72, "mktcap_b": 2.5}
+        ]},
+        "unusual_activity": []
+    }
+    send_scanner_report(test_results)
