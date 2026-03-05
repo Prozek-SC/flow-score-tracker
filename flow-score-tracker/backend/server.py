@@ -313,11 +313,43 @@ def trigger_scanner():
     import threading
     def _run():
         try:
-            run_scanner()
+            results = run_scanner()
+
+            # Score top 10 by RS across all sectors
+            sector_stocks = results.get("sector_stocks", {})
+            top_sectors = results.get("top_sectors", [])
+            all_candidates = []
+            for sector_data in top_sectors:
+                sname = sector_data["sector"]
+                for s in sector_stocks.get(sname, []):
+                    all_candidates.append({"ticker": s["ticker"], "sector": sname, "rs": s.get("rs_vs_etf", 0)})
+
+            top10 = sorted(all_candidates, key=lambda x: x["rs"], reverse=True)[:10]
+            if top10:
+                print(f"  Scoring top 10: {[t['ticker'] for t in top10]}")
+                scored = score_tickers(top10)
+                score_map = {r["ticker"]: r for r in scored}
+                for sname, stocks in sector_stocks.items():
+                    for stock in stocks:
+                        if stock["ticker"] in score_map:
+                            stock["flow_score"] = score_map[stock["ticker"]].get("flow_score")
+                            stock["rating"] = score_map[stock["ticker"]].get("rating")
+
+                # Re-save to Supabase with scores merged in
+                sb = get_sb()
+                import json as _json
+                from datetime import datetime as _dt, date as _date
+                sb.table("scanner_results").upsert({
+                    "run_date": _date.today().isoformat(),
+                    "results": _json.dumps(results),
+                    "updated_at": _dt.now().isoformat(),
+                }, on_conflict="run_date").execute()
+                print("  Scanner results updated with scores.")
+
         except Exception as e:
             print(f"Scanner error: {e}")
     threading.Thread(target=_run, daemon=True).start()
-    return jsonify({"success": True, "message": "Scanner started in background"})
+    return jsonify({"success": True, "message": "Scanner started — scores will appear in ~2 min"})
 
 
 @app.route("/api/scanner/results")
