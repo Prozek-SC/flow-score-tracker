@@ -205,10 +205,10 @@ function SectorCard({ sector, isSelected, onClick }) {
   );
 }
 
-function StockRow({ stock, rank }) {
+function StockRow({ stock, rank, sector, onAdd, added }) {
   const rsColor = perfColor(stock.rs_vs_etf);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "32px 80px 1fr 80px 80px 80px 80px 60px",
+    <div style={{ display: "grid", gridTemplateColumns: "32px 80px 1fr 80px 80px 80px 80px 60px 80px",
       gap: 12, padding: "12px 16px", borderBottom: "1px solid #0f0f1e",
       alignItems: "center", transition: "background 0.15s" }}
       onMouseEnter={e => e.currentTarget.style.background = "#0a0a18"}
@@ -251,6 +251,18 @@ function StockRow({ stock, rank }) {
         <div style={{ fontSize: 11, fontFamily: "monospace", color: "#888" }}>${fmt(stock.mktcap_b, 1)}B</div>
         <div style={{ fontSize: 9, color: "#444" }}>MKTCAP</div>
       </div>
+      <div style={{ textAlign: "center" }}>
+        <button
+          onClick={e => { e.stopPropagation(); onAdd(stock.ticker, sector); }}
+          disabled={added}
+          style={{ fontSize: 10, fontWeight: 700, cursor: added ? "default" : "pointer",
+            color: added ? "#00d4aa" : "#888",
+            background: added ? "#00d4aa11" : "#1a1a2e",
+            border: `1px solid ${added ? "#00d4aa44" : "#2a2a3e"}`,
+            borderRadius: 4, padding: "4px 8px", fontFamily: "monospace" }}>
+          {added ? "✓" : "+ WL"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -286,6 +298,17 @@ function ScannerTab() {
   const [running, setRunning] = useState(false);
   const [selectedSector, setSelectedSector] = useState(null);
   const [lastRun, setLastRun] = useState(null);
+  const [addedTickers, setAddedTickers] = useState({});
+
+  const addToWatchlist = async (ticker, sector) => {
+    try {
+      await fetch(`${API_BASE}/api/watchlist`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker, sector: sector || "" })
+      });
+      setAddedTickers(prev => ({ ...prev, [ticker]: true }));
+    } catch (e) { console.error(e); }
+  };
 
   const fetchResults = useCallback(async () => {
     setLoading(true);
@@ -376,10 +399,10 @@ function ScannerTab() {
 
                 <div style={{ background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 8, overflow: "hidden" }}>
                   {/* Table header */}
-                  <div style={{ display: "grid", gridTemplateColumns: "32px 80px 1fr 80px 80px 80px 80px 60px",
+                  <div style={{ display: "grid", gridTemplateColumns: "32px 80px 1fr 80px 80px 80px 80px 60px 80px",
                     gap: 12, padding: "10px 16px", borderBottom: "1px solid #1a1a2e",
                     background: "#0d0d1a" }}>
-                    {["#", "TICKER", "NAME", "RS vs ETF", "3M", "1M", "MA", "MKTCAP"].map(h => (
+                    {["#", "TICKER", "NAME", "RS vs ETF", "3M", "1M", "MA", "MKTCAP", ""].map(h => (
                       <div key={h} style={{ fontSize: 9, color: "#444", letterSpacing: 1,
                         textAlign: ["RS vs ETF", "3M", "1M", "MKTCAP"].includes(h) ? "right" : "center" === h ? "center" : "left" }}>
                         {h}
@@ -389,7 +412,7 @@ function ScannerTab() {
                   {stocks.length === 0 ? (
                     <div style={{ padding: 32, textAlign: "center", color: "#444", fontSize: 12 }}>No stocks found</div>
                   ) : (
-                    stocks.map((s, i) => <StockRow key={s.ticker} stock={s} rank={i + 1} />)
+                    stocks.map((s, i) => <StockRow key={s.ticker} stock={s} rank={i + 1} sector={selectedSector} onAdd={addToWatchlist} added={!!addedTickers[s.ticker]} />)
                   )}
                 </div>
               </>
