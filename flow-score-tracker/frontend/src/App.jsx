@@ -567,7 +567,7 @@ export default function App() {
           )}
           <button onClick={() => window.open(`${API_BASE}/api/export/scores`, "_blank")} style={btnStyle("#1a1a2e", "#888")}>↓ CSV</button>
           <button onClick={runScan} disabled={scanning} style={btnStyle(scanning ? "#1a1a2e" : "#00d4aa", scanning ? "#555" : "#000")}>
-            {scanning ? "Scanning..." : "▶ Run Scan"}
+            {scanning ? "Scoring..." : "▶ Score Watchlist"}
           </button>
         </div>
       </div>
