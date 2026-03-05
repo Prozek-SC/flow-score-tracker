@@ -1,11 +1,12 @@
 """
 Market Scanner — TradingView Screener API
 - Top 3 sectors: sector ETF price above 200MA, ranked by distance from 200MA
-- Top 25 stocks per sector: S&P 500 constituents ranked by RS vs sector ETF (63d)
-- Unusual options activity: options volume/OI ratio spike
+- Top 25 stocks per sector: ranked by RS vs sector ETF (3M)
+- Unusual options activity: volume/OI ratio spike
 """
 import os
 import json
+import math
 import requests
 from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
@@ -54,6 +55,17 @@ TV_SECTOR_MAP = {
 }
 
 
+def safe_float(val, default=0.0):
+    """Convert to float, replacing NaN/None/inf with default."""
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return default
+        return f
+    except:
+        return default
+
+
 def get_supabase():
     return create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
 
@@ -84,10 +96,10 @@ def get_top_sectors(top_n: int = 3):
     sectors = []
     for _, row in df.iterrows():
         etf = row['name']
-        price = float(row.get('close') or 0)
-        ma200 = float(row.get('SMA200') or 0)
-        perf_3m = float(row.get('Perf.3M') or 0)
-        perf_1m = float(row.get('Perf.1M') or 0)
+        price = safe_float(row.get('close'))
+        ma200 = safe_float(row.get('SMA200'))
+        perf_3m = safe_float(row.get('Perf.3M'))
+        perf_1m = safe_float(row.get('Perf.1M'))
 
         if ma200 == 0:
             continue
@@ -144,22 +156,22 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
 
     stocks = []
     for _, row in df.iterrows():
-        price = float(row.get('close') or 0)
-        ma200 = float(row.get('SMA200') or 0)
-        ma50 = float(row.get('SMA50') or 0)
-        perf_3m = float(row.get('Perf.3M') or 0)
-        perf_1m = float(row.get('Perf.1M') or 0)
-        rel_vol = float(row.get('relative_volume_10d_calc') or 0)
-        mktcap = float(row.get('market_cap_basic') or 0)
+        price = safe_float(row.get('close'))
+        ma200 = safe_float(row.get('SMA200'))
+        ma50 = safe_float(row.get('SMA50'))
+        perf_3m = safe_float(row.get('Perf.3M'))
+        perf_1m = safe_float(row.get('Perf.1M'))
+        rel_vol = safe_float(row.get('relative_volume_10d_calc'))
+        mktcap = safe_float(row.get('market_cap_basic'))
 
         stocks.append({
-            "ticker": row['name'],
-            "name": row.get('description', row['name']),
+            "ticker": str(row['name']),
+            "name": str(row.get('description') or row['name']),
             "price": round(price, 2),
             "ma200": round(ma200, 2),
             "ma50": round(ma50, 2),
-            "above_200ma": price > ma200 if ma200 else None,
-            "above_50ma": price > ma50 if ma50 else None,
+            "above_200ma": bool(price > ma200) if ma200 else None,
+            "above_50ma": bool(price > ma50) if ma50 else None,
             "perf_3m": round(perf_3m, 2),
             "perf_1m": round(perf_1m, 2),
             "rs_vs_etf": round(perf_3m - etf_perf_3m, 2),
