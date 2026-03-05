@@ -266,6 +266,29 @@ def run_scanner() -> dict:
     unusual = get_unusual_options(list(dict.fromkeys(all_top_tickers)))
     print(f"  Found {len(unusual)} unusual activity flags")
 
+    # Fetch all scores from Supabase and build a ticker -> score map
+    print("  Fetching scores from Supabase...")
+    score_map = {}
+    try:
+        all_tickers = list({t for stocks in sector_stocks.values() for t in [s["ticker"] for s in stocks]})
+        if all_tickers:
+            rows = sb.table("scores").select("ticker, flow_score, rating").in_("ticker", all_tickers).execute()
+            for row in (rows.data or []):
+                score_map[row["ticker"]] = {
+                    "flow_score": row.get("flow_score"),
+                    "rating": row.get("rating"),
+                }
+        print(f"  Found scores for {len(score_map)} tickers")
+    except Exception as e:
+        print(f"  Score fetch error: {e}")
+
+    # Merge scores into sector_stocks
+    for sector in sector_stocks:
+        for stock in sector_stocks[sector]:
+            s = score_map.get(stock["ticker"], {})
+            stock["flow_score"] = s.get("flow_score")
+            stock["rating"] = s.get("rating")
+
     output = {
         "run_date": date.today().isoformat(),
         "run_at": datetime.now().isoformat(),
