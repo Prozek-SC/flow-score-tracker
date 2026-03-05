@@ -133,6 +133,100 @@ def get_sector_perf(ticker_sector: str, sector_scores: list) -> float:
 # WEEKLY FLOW SCORE
 # ============================================================
 
+def score_tickers(ticker_sector_list: list) -> list:
+    """
+    Score an arbitrary list of [{"ticker": ..., "sector": ...}] dicts.
+    Used by scanner to score top results without requiring watchlist membership.
+    """
+    print(f"[{datetime.now()}] Scoring {len(ticker_sector_list)} tickers...")
+    sb = get_supabase()
+    ts_client = AlphaVantageClient()
+    finviz = FinvizClient()
+    uw = TradierOptionsClient()
+
+    tickers = [t["ticker"] for t in ticker_sector_list]
+
+    fund_flows = get_ici_fund_flows()
+    equity_weekly = fund_flows["equity_weekly"]
+    equity_avg = fund_flows["equity_4wk_avg"]
+
+    sector_scores = score_all_sectors(finviz, ts_client, equity_weekly, equity_avg)
+
+    try:
+        fv_batch = finviz.get_ticker_data(tickers)
+    except Exception as e:
+        print(f"  Finviz error: {e}")
+        fv_batch = {}
+
+    spy_perf_63d = 0
+    try:
+        spy_bars = ts_client.get_bars("SPY", bars_back=70)
+        if spy_bars and len(spy_bars) >= 63:
+            spy_now = float(spy_bars[-1].get("Close", 0))
+            spy_63 = float(spy_bars[-63].get("Close", 0))
+            spy_perf_63d = (spy_now - spy_63) / spy_63 * 100
+    except:
+        pass
+
+    results = []
+    for item in ticker_sector_list:
+        ticker = item["ticker"]
+        sector = item.get("sector", "")
+        print(f"  Scoring {ticker}...")
+        try:
+            bars = []
+            try:
+                bars = ts_client.get_bars(ticker, bars_back=200)
+            except Exception as e:
+                print(f"    AlphaVantage error: {e}")
+
+            fv = fv_batch.get(ticker, {})
+            price = fv.get("price", 0)
+            ma50 = fv.get("sma50", 0)
+            ma200 = fv.get("sma200", 0)
+            ma20 = price
+
+            try:
+                uw_flow = uw.get_flow_for_ticker(ticker)
+                uw_unusual = uw.get_unusual_activity(ticker)
+                merged_flow = {**uw_flow, **uw_unusual}
+            except:
+                merged_flow = {}
+
+            sector_rank = get_sector_rank_for_ticker(sector, sector_scores)
+            sector_ytd = get_sector_perf(sector, sector_scores)
+            sector_etf_flow = 0
+            for s in sector_scores:
+                if sector.lower() in s["sector"].lower():
+                    sector_etf_flow = s.get("etf_flow_m", 0)
+                    break
+
+            l1 = score_capital_flow_level1(equity_weekly, equity_avg)
+            l2 = score_capital_flow_level2(sector_ytd, sector_etf_flow, sector_rank)
+            l3 = score_capital_flow_level3(bars, fv, merged_flow)
+            capital_flow = score_capital_flow_pillar(l1, l2, l3)
+            trend = score_trend_pillar(price, ma20, ma50, ma200, bars)
+            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_ytd)
+
+            result = calculate_flow_score(capital_flow, trend, momentum)
+            result["ticker"] = ticker
+            result["price"] = price
+            result["sector"] = sector
+            result["date"] = date.today().isoformat()
+
+            prev = get_previous_score(sb, ticker)
+            result["burst"] = detect_burst_trade(result["flow_score"], prev)
+
+            results.append(result)
+            save_weekly_score(sb, ticker, result)
+
+        except Exception as e:
+            print(f"  ERROR scoring {ticker}: {e}")
+
+    print(f"[{datetime.now()}] Scored {len(results)} tickers.")
+    return results
+
+
 def run_weekly_flow_score():
     """
     Full Flow Score calculation. Run weekly (Fridays after close).
