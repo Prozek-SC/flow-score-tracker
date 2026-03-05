@@ -398,7 +398,7 @@ function ScannerTab({ watchlistTickers = new Set(), onWatchlistChange }) {
           )}
         </div>
         <button onClick={runScan} disabled={running} style={btnStyle(running ? "#1a1a2e" : "#00d4aa", running ? "#555" : "#000")}>
-          {running ? "⟳ Scanning..." : "▶ Run Scanner"}
+          {running ? "⟳ Scanning..." : "▶ Market Scanner"}
         </button>
       </div>
 
@@ -411,8 +411,8 @@ function ScannerTab({ watchlistTickers = new Set(), onWatchlistChange }) {
       {!loading && !data && (
         <div style={{ textAlign: "center", padding: 80 }}>
           <div style={{ fontSize: 14, color: "#aaa", marginBottom: 16 }}>No scanner results yet</div>
-          <div style={{ fontSize: 11, color: "#888", marginBottom: 24 }}>Click "Run Scanner" to find top sectors and stocks</div>
-          <button onClick={runScan} style={btnStyle("#00d4aa", "#000")}>▶ Run Scanner</button>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 24 }}>Click "Market Scanner" to find top sectors and stocks</div>
+          <button onClick={runScan} style={btnStyle("#00d4aa", "#000")}>▶ Market Scanner</button>
         </div>
       )}
 
