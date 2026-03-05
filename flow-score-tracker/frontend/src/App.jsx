@@ -324,6 +324,7 @@ function ScannerTab({ watchlistTickers = new Set(), onWatchlistChange }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
+  const [scanStatus, setScanStatus] = useState(null);
   const [selectedSector, setSelectedSector] = useState(null);
   const [lastRun, setLastRun] = useState(null);
   const addToWatchlist = async (ticker, sector) => {
@@ -356,10 +357,29 @@ function ScannerTab({ watchlistTickers = new Set(), onWatchlistChange }) {
 
   const runScan = async () => {
     setRunning(true);
+    setScanStatus("Scanning sectors...");
     try {
       await fetch(`${API_BASE}/api/scanner/run`, { method: "POST" });
-      setTimeout(() => { fetchResults(); setRunning(false); }, 8000);
-    } catch (e) { setRunning(false); }
+      // Poll every 15s for up to 3 min — scanner returns quickly, scoring takes ~2 min
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        if (attempts <= 2) setScanStatus("Fetching stocks...");
+        else setScanStatus(`Scoring top stocks... (${attempts * 15}s)`);
+        await fetchResults();
+        // Check if any scores populated yet (after attempt 2)
+        if (attempts >= 2) {
+          const hasScores = Object.values(data?.sector_stocks || {})
+            .flat().some(s => s.flow_score != null);
+          if (hasScores || attempts >= 12) {
+            clearInterval(poll);
+            setRunning(false);
+            setScanStatus(null);
+          }
+        }
+        if (attempts >= 12) { clearInterval(poll); setRunning(false); setScanStatus(null); }
+      }, 15000);
+    } catch (e) { setRunning(false); setScanStatus(null); }
   };
 
   const stocks = selectedSector && data?.sector_stocks?.[selectedSector] || [];
