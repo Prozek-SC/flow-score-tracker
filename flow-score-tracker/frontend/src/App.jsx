@@ -346,11 +346,13 @@ function ScannerTab({ watchlistTickers = new Set(), onWatchlistChange }) {
         setData(json.data);
         setLastRun(json.data.run_at);
         if (json.data.top_sectors?.length > 0) {
-          setSelectedSector(json.data.top_sectors[0].sector);
+          setSelectedSector(prev => prev || json.data.top_sectors[0].sector);
         }
+        return json.data;
       }
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
+    return null;
   }, []);
 
   useEffect(() => { fetchResults(); }, [fetchResults]);
@@ -364,20 +366,16 @@ function ScannerTab({ watchlistTickers = new Set(), onWatchlistChange }) {
       let attempts = 0;
       const poll = setInterval(async () => {
         attempts++;
-        if (attempts <= 2) setScanStatus("Fetching stocks...");
+        if (attempts <= 1) setScanStatus("Fetching stocks...");
         else setScanStatus(`Scoring top stocks... (${attempts * 15}s)`);
-        await fetchResults();
-        // Check if any scores populated yet (after attempt 2)
-        if (attempts >= 2) {
-          const hasScores = Object.values(data?.sector_stocks || {})
-            .flat().some(s => s.flow_score != null);
-          if (hasScores || attempts >= 12) {
-            clearInterval(poll);
-            setRunning(false);
-            setScanStatus(null);
-          }
+        const latest = await fetchResults();
+        const hasScores = Object.values(latest?.sector_stocks || {})
+          .flat().some(s => s.flow_score != null);
+        if (hasScores || attempts >= 12) {
+          clearInterval(poll);
+          setRunning(false);
+          setScanStatus(null);
         }
-        if (attempts >= 12) { clearInterval(poll); setRunning(false); setScanStatus(null); }
       }, 15000);
     } catch (e) { setRunning(false); setScanStatus(null); }
   };
