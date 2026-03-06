@@ -191,25 +191,25 @@ function SectorCard({ sector, isSelected, onClick }) {
       </div>
       <div style={{ display: "flex", gap: 20, marginTop: 16 }}>
         <div>
-          <div style={{ fontSize: 9, color: "#888", letterSpacing: 1 }}>PRICE</div>
+          <div style={{ fontSize: 10, color: "#888", letterSpacing: 1 }}>PRICE</div>
           <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: "#fff" }}>
             ${fmt(sector.price, 2)}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: "#888", letterSpacing: 1 }}>200MA</div>
+          <div style={{ fontSize: 10, color: "#888", letterSpacing: 1 }}>200MA</div>
           <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: "#888" }}>
             ${fmt(sector.ma200, 2)}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: "#888", letterSpacing: 1 }}>3M PERF</div>
+          <div style={{ fontSize: 10, color: "#888", letterSpacing: 1 }}>3M PERF</div>
           <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: perfColor(sector.perf_3m) }}>
             {sector.perf_3m > 0 ? "+" : ""}{fmt(sector.perf_3m)}%
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: "#888", letterSpacing: 1 }}>1M PERF</div>
+          <div style={{ fontSize: 10, color: "#888", letterSpacing: 1 }}>1M PERF</div>
           <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: perfColor(sector.perf_1m) }}>
             {sector.perf_1m > 0 ? "+" : ""}{fmt(sector.perf_1m)}%
           </div>
@@ -227,7 +227,7 @@ function StockRow({ stock, rank, sector, onAdd, added }) {
       alignItems: "center", transition: "background 0.15s" }}
       onMouseEnter={e => e.currentTarget.style.background = "#0a0a18"}
       onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-      <div style={{ fontSize: 11, color: "#888", fontFamily: "monospace" }}>{rank}</div>
+      <div style={{ fontSize: 13, color: "#888", fontFamily: "monospace" }}>{rank}</div>
       <div>
         <a href={tvLink(stock.ticker)} target="_blank" rel="noreferrer"
           style={{ fontSize: 14, fontWeight: 900, color: "#00d4aa", fontFamily: "monospace",
@@ -236,9 +236,9 @@ function StockRow({ stock, rank, sector, onAdd, added }) {
           onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
           {stock.ticker} ↗
         </a>
-        <div style={{ fontSize: 9, color: "#aaa", marginTop: 1 }}>${fmt(stock.price, 2)}</div>
+        <div style={{ fontSize: 11, color: "#aaa", marginTop: 1 }}>${fmt(stock.price, 2)}</div>
       </div>
-      <div style={{ fontSize: 11, color: "#666", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: 12, color: "#888", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
         {stock.name}
       </div>
       <div style={{ textAlign: "center" }}>
@@ -250,25 +250,25 @@ function StockRow({ stock, rank, sector, onAdd, added }) {
         )}
       </div>
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace", color: rsColor }}>
+        <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: rsColor }}>
           {stock.rs_vs_etf > 0 ? "+" : ""}{fmt(stock.rs_vs_etf)}%
         </div>
-        <div style={{ fontSize: 9, color: "#888" }}>RS vs ETF</div>
+        <div style={{ fontSize: 11, color: "#888" }}>RS vs ETF</div>
       </div>
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 12, fontFamily: "monospace", color: perfColor(stock.perf_3m) }}>
+        <div style={{ fontSize: 14, fontFamily: "monospace", color: perfColor(stock.perf_3m) }}>
           {stock.perf_3m > 0 ? "+" : ""}{fmt(stock.perf_3m)}%
         </div>
-        <div style={{ fontSize: 9, color: "#888" }}>3M</div>
+        <div style={{ fontSize: 11, color: "#888" }}>3M</div>
       </div>
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 12, fontFamily: "monospace", color: perfColor(stock.perf_1m) }}>
+        <div style={{ fontSize: 14, fontFamily: "monospace", color: perfColor(stock.perf_1m) }}>
           {stock.perf_1m > 0 ? "+" : ""}{fmt(stock.perf_1m)}%
         </div>
-        <div style={{ fontSize: 9, color: "#888" }}>1M</div>
+        <div style={{ fontSize: 11, color: "#888" }}>1M</div>
       </div>
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 10, fontWeight: 700,
+        <div style={{ fontSize: 11, fontWeight: 700,
           color: stock.above_200ma ? "#00d4aa" : "#ff4444",
           background: stock.above_200ma ? "#00d4aa11" : "#ff444411",
           padding: "2px 6px", borderRadius: 4 }}>
@@ -276,14 +276,14 @@ function StockRow({ stock, rank, sector, onAdd, added }) {
         </div>
       </div>
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 11, fontFamily: "monospace", color: "#888" }}>${fmt(stock.mktcap_b, 1)}B</div>
-        <div style={{ fontSize: 9, color: "#888" }}>MKTCAP</div>
+        <div style={{ fontSize: 14, fontFamily: "monospace", color: "#aaa" }}>${fmt(stock.mktcap_b, 1)}B</div>
+        <div style={{ fontSize: 11, color: "#888" }}>MKTCAP</div>
       </div>
       <div style={{ textAlign: "center" }}>
         <button
           onClick={e => { e.stopPropagation(); onAdd(stock.ticker, sector); }}
           disabled={added}
-          style={{ fontSize: 10, fontWeight: 700, cursor: added ? "default" : "pointer",
+          style={{ fontSize: 11, fontWeight: 700, cursor: added ? "default" : "pointer",
             color: added ? "#00d4aa" : "#888",
             background: added ? "#00d4aa11" : "#1a1a2e",
             border: `1px solid ${added ? "#00d4aa44" : "#2a2a3e"}`,
@@ -312,7 +312,7 @@ function UnusualActivityBadge({ item }) {
         <div style={{ fontSize: 13, fontWeight: 900, fontFamily: "monospace", color }}>
           {fmt(item.vol_oi_ratio)}x
         </div>
-        <div style={{ fontSize: 9, color, fontWeight: 700, letterSpacing: 1 }}>
+        <div style={{ fontSize: 11, color, fontWeight: 700, letterSpacing: 1 }}>
           {item.bias?.toUpperCase()}
         </div>
       </div>
@@ -447,7 +447,7 @@ function ScannerTab({ watchlistTickers = new Set(), onWatchlistChange }) {
                     gap: 12, padding: "10px 16px", borderBottom: "1px solid #1a1a2e",
                     background: "#0d0d1a" }}>
                     {["#", "TICKER", "NAME", "SCORE", "RS vs ETF", "3M", "1M", "MA", "MKTCAP", ""].map(h => (
-                      <div key={h} style={{ fontSize: 9, color: "#888", letterSpacing: 1,
+                      <div key={h} style={{ fontSize: 10, color: "#888", letterSpacing: 1,
                         textAlign: ["RS vs ETF", "3M", "1M", "MKTCAP"].includes(h) ? "right" : "center" === h ? "center" : "left" }}>
                         {h}
                       </div>
