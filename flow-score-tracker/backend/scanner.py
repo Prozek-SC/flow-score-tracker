@@ -272,7 +272,7 @@ def run_scanner() -> dict:
     try:
         all_tickers = list({t for stocks in sector_stocks.values() for t in [s["ticker"] for s in stocks]})
         if all_tickers:
-            rows = sb.table("scores").select("ticker, flow_score, rating").in_("ticker", all_tickers).execute()
+            rows = sb.table("weekly_scores").select("ticker, flow_score, rating").in_("ticker", all_tickers).execute()
             for row in (rows.data or []):
                 score_map[row["ticker"]] = {
                     "flow_score": row.get("flow_score"),
