@@ -10,7 +10,6 @@ from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 from supabase import create_client
 
-from alphavantage_client import AlphaVantageClient
 from data_clients import FinvizClient, TradierOptionsClient
 from scoring_engine import (
     score_capital_flow_level1, score_capital_flow_level2,
@@ -80,7 +79,7 @@ def get_ici_fund_flows() -> dict:
 # SECTOR SCORING
 # ============================================================
 
-def score_all_sectors(finviz: FinvizClient, ts_client: AlphaVantageClient,
+def score_all_sectors(finviz: FinvizClient, _ts_client,
                        equity_flow: float, equity_avg: float) -> list:
     """Score all 11 sector ETFs and return ranked list"""
     etf_tickers = list(SECTOR_ETFS.values())
@@ -140,7 +139,6 @@ def score_tickers(ticker_sector_list: list) -> list:
     """
     print(f"[{datetime.now()}] Scoring {len(ticker_sector_list)} tickers...")
     sb = get_supabase()
-    ts_client = AlphaVantageClient()
     finviz = FinvizClient()
     uw = TradierOptionsClient()
 
@@ -150,23 +148,18 @@ def score_tickers(ticker_sector_list: list) -> list:
     equity_weekly = fund_flows["equity_weekly"]
     equity_avg = fund_flows["equity_4wk_avg"]
 
-    sector_scores = score_all_sectors(finviz, ts_client, equity_weekly, equity_avg)
+    sector_scores = score_all_sectors(finviz, None, equity_weekly, equity_avg)
 
+    # Fetch all tickers + SPY in one Finviz batch call
     try:
-        fv_batch = finviz.get_ticker_data(tickers)
+        fv_batch = finviz.get_ticker_data(tickers + ["SPY"])
     except Exception as e:
         print(f"  Finviz error: {e}")
         fv_batch = {}
 
-    spy_perf_63d = 0
-    try:
-        spy_bars = ts_client.get_bars("SPY", bars_back=70)
-        if spy_bars and len(spy_bars) >= 63:
-            spy_now = float(spy_bars[-1].get("Close", 0))
-            spy_63 = float(spy_bars[-63].get("Close", 0))
-            spy_perf_63d = (spy_now - spy_63) / spy_63 * 100
-    except:
-        pass
+    # SPY 63-day perf from Finviz perf_quarter field
+    spy_fv = fv_batch.get("SPY", {})
+    spy_perf_63d = spy_fv.get("perf_quarter", 0)
 
     results = []
     for item in ticker_sector_list:
@@ -174,11 +167,7 @@ def score_tickers(ticker_sector_list: list) -> list:
         sector = item.get("sector", "")
         print(f"  Scoring {ticker}...")
         try:
-            bars = []
-            try:
-                bars = ts_client.get_bars(ticker, bars_back=200)
-            except Exception as e:
-                print(f"    AlphaVantage error: {e}")
+            bars = []  # No bar data — all signals use Finviz
 
             fv = fv_batch.get(ticker, {})
             price = fv.get("price", 0)
@@ -233,7 +222,6 @@ def run_weekly_flow_score():
     """
     print(f"[{datetime.now()}] Running WEEKLY Flow Score...")
     sb = get_supabase()
-    ts_client = AlphaVantageClient()
     finviz = FinvizClient()
     uw = TradierOptionsClient()
 
@@ -251,27 +239,19 @@ def run_weekly_flow_score():
     print(f"  Equity flow: ${equity_weekly/1000:.1f}B (4wk avg: ${equity_avg/1000:.1f}B)")
 
     # --- Level 2: Sector Scores ---
-    sector_scores = score_all_sectors(finviz, ts_client, equity_weekly, equity_avg)
+    sector_scores = score_all_sectors(finviz, None, equity_weekly, equity_avg)
     save_sector_scores(sb, sector_scores)
     print(f"  Sectors scored. Top: {sector_scores[0]['sector']} ({sector_scores[0]['flow_score']})")
 
-    # --- Finviz batch fetch ---
+    # --- Finviz batch fetch (tickers + SPY for RS baseline) ---
     try:
-        fv_batch = finviz.get_ticker_data(tickers)
+        fv_batch = finviz.get_ticker_data(tickers + ["SPY"])
     except Exception as e:
         print(f"  Finviz error: {e}")
         fv_batch = {}
 
-    # --- SPY performance for RS calculation ---
-    spy_perf_63d = 0
-    try:
-        spy_bars = ts_client.get_bars("SPY", bars_back=70)
-        if spy_bars and len(spy_bars) >= 63:
-            spy_now = float(spy_bars[-1].get("Close", 0))
-            spy_63 = float(spy_bars[-63].get("Close", 0))
-            spy_perf_63d = (spy_now - spy_63) / spy_63 * 100
-    except:
-        pass
+    # --- SPY 63-day perf from Finviz perf_quarter ---
+    spy_perf_63d = fv_batch.get("SPY", {}).get("perf_quarter", 0)
 
     results = []
     for w in watchlist:
@@ -280,12 +260,7 @@ def run_weekly_flow_score():
         print(f"  Scoring {ticker}...")
 
         try:
-            # Fetch bars
-            bars = []
-            try:
-                bars = ts_client.get_bars(ticker, bars_back=200)
-            except Exception as e:
-                print(f"    AlphaVantage error: {e}")
+            bars = []  # No bar data — all signals use Finviz
 
             fv = fv_batch.get(ticker, {})
             price = fv.get("price", 0)
@@ -360,7 +335,6 @@ def run_daily_price_update():
     """
     print(f"[{datetime.now()}] Running daily price update...")
     sb = get_supabase()
-    ts_client = AlphaVantageClient()
     finviz = FinvizClient()
 
     watchlist = get_watchlist(sb)
@@ -380,8 +354,7 @@ def run_daily_price_update():
         fv = fv_data.get(ticker, {})
 
         try:
-            quote = ts_client.get_quote(ticker) or {}
-            price = fv.get("price", float(quote.get("Last", 0)))
+            price = fv.get("price", 0)
             ma50 = fv.get("sma50", 0)
             ma200 = fv.get("sma200", 0)
             rel_vol = fv.get("relative_volume", 0)
