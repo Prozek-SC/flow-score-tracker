@@ -1,5 +1,5 @@
 """
-Finviz Elite + Unusual Whales Data Clients
+Data Clients — Finviz Elite + Tradier Options
 """
 import os
 import requests
@@ -9,219 +9,193 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+FINVIZ_EXPORT_URL = "https://elite.finviz.com/export.ashx"
+
 
 class FinvizClient:
     """
-    Finviz Elite screener export client.
-    Uses the authenticated export endpoint to pull fundamentals,
-    institutional ownership, short interest, and RS data.
+    Finviz Elite API client using token-based authentication.
+    Pass auth token via FINVIZ_API_TOKEN env var.
+    URL format: https://elite.finviz.com/export.ashx?v=111&t=AAPL,MSFT&auth=TOKEN
     """
-    EXPORT_URL = "https://elite.finviz.com/export.ashx"
-    SCREENER_URL = "https://elite.finviz.com/screener.ashx"
+
+    # Columns to request — maps Finviz column names to our internal keys
+    COLUMNS = [
+        "Ticker", "Company", "Sector", "Industry", "Country",
+        "Market Cap", "Price", "Change", "Volume", "Avg Volume",
+        "Rel Volume", "SMA20", "SMA50", "SMA200",
+        "52W High", "52W Low", "RSI (14)",
+        "Perf Week", "Perf Month", "Perf Quart", "Perf Half", "Perf Year",
+        "Inst Own", "Inst Trans", "Short Float", "Short Ratio",
+        "EPS (ttm)", "P/E", "Forward P/E", "Insider Own",
+    ]
 
     def __init__(self):
-        self.email = os.getenv("FINVIZ_EMAIL")
-        self.password = os.getenv("FINVIZ_PASSWORD")
-        self.session = requests.Session()
-        self._logged_in = False
-
-    def login(self):
-        """Authenticate with Finviz Elite"""
-        login_url = "https://finviz.com/login.ashx"
-        payload = {
-            "email": self.email,
-            "password": self.password,
-            "remember": "true",
-        }
-        resp = self.session.post(login_url, data=payload)
-        resp.raise_for_status()
-        self._logged_in = True
+        self.token = os.getenv("FINVIZ_API_TOKEN")
+        if not self.token:
+            print("  WARNING: FINVIZ_API_TOKEN not set")
 
     def get_ticker_data(self, symbols: list) -> dict:
         """
-        Fetch screener data for a list of symbols.
-        Returns dict keyed by ticker with all Finviz columns.
+        Fetch screener data for a list of tickers.
+        Returns dict keyed by ticker with standardized fields.
         """
-        if not self._logged_in:
-            self.login()
+        if not self.token:
+            print("  Finviz: no API token — skipping")
+            return {}
+        if not symbols:
+            return {}
 
+        # Finviz accepts up to ~500 tickers in one request
         tickers_str = ",".join(symbols)
-        params = {
-            "v": "152",
-            "t": tickers_str,
-            "o": "ticker",
-        }
-        resp = self.session.get(self.EXPORT_URL, params=params)
-        resp.raise_for_status()
+        url = (
+            f"{FINVIZ_EXPORT_URL}"
+            f"?v=111"
+            f"&t={tickers_str}"
+            f"&auth={self.token}"
+        )
 
-        df = pd.read_csv(StringIO(resp.text))
-        result = {}
-        for _, row in df.iterrows():
-            ticker = row.get("Ticker", "")
-            if ticker:
+        try:
+            resp = requests.get(url, timeout=15)
+            if resp.status_code == 401:
+                print("  Finviz: 401 Unauthorized — check FINVIZ_API_TOKEN")
+                return {}
+            if resp.status_code == 403:
+                print("  Finviz: 403 Forbidden — token may be expired or plan doesn't include API")
+                return {}
+            resp.raise_for_status()
+
+            df = pd.read_csv(StringIO(resp.text))
+            result = {}
+            for _, row in df.iterrows():
+                ticker = str(row.get("Ticker", "")).strip()
+                if not ticker:
+                    continue
                 result[ticker] = {
-                    "institutional_own_pct": self._parse_pct(row.get("Inst Own", "0%")),
-                    "institutional_trans_pct": self._parse_pct(row.get("Inst Trans", "0%")),
-                    "short_float_pct": self._parse_pct(row.get("Short Float", "0%")),
-                    "short_ratio": self._parse_float(row.get("Short Ratio", 0)),
-                    "rs_rating": self._parse_float(row.get("Perf Year", "0%")),
-                    "perf_week": self._parse_pct(row.get("Perf Week", "0%")),
-                    "perf_month": self._parse_pct(row.get("Perf Month", "0%")),
-                    "perf_quarter": self._parse_pct(row.get("Perf Quarter", "0%")),
-                    "price": self._parse_float(row.get("Price", 0)),
-                    "sma50": self._parse_float(row.get("SMA50", 0)),
-                    "sma200": self._parse_float(row.get("SMA200", 0)),
-                    "volume": self._parse_float(row.get("Volume", 0)),
-                    "avg_volume": self._parse_float(row.get("Avg Volume", 0)),
-                    "relative_volume": self._parse_float(row.get("Rel Volume", 0)),
+                    "price":               self._float(row.get("Price", 0)),
+                    "sma20":               self._float(row.get("SMA20", 0)),
+                    "sma50":               self._float(row.get("SMA50", 0)),
+                    "sma200":              self._float(row.get("SMA200", 0)),
+                    "volume":              self._float(row.get("Volume", 0)),
+                    "avg_volume":          self._float(row.get("Avg Volume", 0)),
+                    "relative_volume":     self._float(row.get("Rel Volume", 0)),
+                    "perf_week":           self._pct(row.get("Perf Week", "0%")),
+                    "perf_month":          self._pct(row.get("Perf Month", "0%")),
+                    "perf_quarter":        self._pct(row.get("Perf Quart", "0%")),
+                    "perf_half":           self._pct(row.get("Perf Half", "0%")),
+                    "perf_year":           self._pct(row.get("Perf Year", "0%")),
+                    "rsi":                 self._float(row.get("RSI (14)", 50)),
+                    "institutional_own":   self._pct(row.get("Inst Own", "0%")),
+                    "institutional_trans": self._pct(row.get("Inst Trans", "0%")),
+                    "short_float":         self._pct(row.get("Short Float", "0%")),
+                    "short_ratio":         self._float(row.get("Short Ratio", 0)),
+                    "insider_own":         self._pct(row.get("Insider Own", "0%")),
+                    "market_cap":          self._float(row.get("Market Cap", 0)),
+                    "sector":              str(row.get("Sector", "")),
+                    "industry":            str(row.get("Industry", "")),
+                    "52w_high":            self._float(row.get("52W High", 0)),
+                    "52w_low":             self._float(row.get("52W Low", 0)),
                 }
-        return result
+            print(f"  Finviz: fetched data for {len(result)} tickers")
+            return result
 
-    def _parse_pct(self, val):
+        except Exception as e:
+            print(f"  Finviz error: {e}")
+            return {}
+
+    def get_sector_etf_data(self, etf_symbols: list) -> dict:
+        """Fetch ETF-level data for sector scoring."""
+        return self.get_ticker_data(etf_symbols)
+
+    def _pct(self, val) -> float:
         try:
-            return float(str(val).replace("%", "").strip())
+            return float(str(val).replace("%", "").replace(",", "").strip())
         except:
             return 0.0
 
-    def _parse_float(self, val):
+    def _float(self, val) -> float:
         try:
-            return float(str(val).replace(",", "").replace("%", "").strip())
+            s = str(val).replace(",", "").replace("%", "").strip()
+            # Handle Finviz shorthand: 1.5B, 234.5M, etc.
+            if s.endswith("B"):
+                return float(s[:-1]) * 1e9
+            if s.endswith("M"):
+                return float(s[:-1]) * 1e6
+            if s.endswith("K"):
+                return float(s[:-1]) * 1e3
+            return float(s)
         except:
             return 0.0
 
+
+# ============================================================
+# TRADIER OPTIONS CLIENT
+# ============================================================
 
 class TradierOptionsClient:
     """
-    Tradier free brokerage API — options chain data.
-    Sign up free at tradier.com/individual/api
-    Uses the sandbox for testing, production for live data.
+    Tradier API client for options flow data.
+    Used for unusual activity detection in scanner and scoring.
     """
-    PROD_URL  = "https://api.tradier.com/v1"
-    SB_URL    = "https://sandbox.tradier.com/v1"
+    BASE_URL = "https://api.tradier.com/v1"
 
     def __init__(self):
-        self.api_key = os.getenv("TRADIER_API_KEY", "")
-        self.base    = self.PROD_URL if self.api_key else self.SB_URL
-        self.session = requests.Session()
-        self.session.headers.update({
+        self.api_key = os.getenv("TRADIER_API_KEY") or os.getenv("TRADIER_TOKEN")
+        self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
-        })
+        } if self.api_key else {}
 
     def get_flow_for_ticker(self, symbol: str) -> dict:
-        """
-        Derive options flow signals from the options chain.
-        Focuses on near-term expirations (7-45 DTE) where
-        institutional positioning is most visible.
-        """
         if not self.api_key:
             return self._empty_flow()
-
-        # Step 1: get available expirations
-        expirations = self._get_expirations(symbol)
-        if not expirations:
+        try:
+            resp = requests.get(
+                f"{self.BASE_URL}/markets/options/chains",
+                headers=self.headers,
+                params={"symbol": symbol, "expiration": self._nearest_expiry(), "greeks": "false"},
+                timeout=5,
+            )
+            if resp.status_code != 200:
+                return self._empty_flow()
+            options = resp.json().get("options", {}).get("option", []) or []
+            calls = [o for o in options if o.get("option_type") == "call"]
+            puts  = [o for o in options if o.get("option_type") == "put"]
+            call_vol = sum(int(o.get("volume") or 0) for o in calls)
+            put_vol  = sum(int(o.get("volume") or 0) for o in puts)
+            total    = call_vol + put_vol
+            return {
+                "call_vol": call_vol,
+                "put_vol": put_vol,
+                "total_vol": total,
+                "call_pct": round(call_vol / total * 100, 1) if total > 0 else 50,
+                "bullish_flow": call_vol > put_vol,
+                "put_call_ratio": round(put_vol / call_vol, 2) if call_vol > 0 else 99,
+            }
+        except Exception as e:
+            print(f"  Tradier flow error {symbol}: {e}")
             return self._empty_flow()
-
-        # Focus on nearest 3 expirations (7-45 DTE sweet spot)
-        target_exps = expirations[:3]
-
-        all_calls, all_puts = [], []
-        avg_volumes = []
-
-        for exp in target_exps:
-            chain = self._get_chain(symbol, exp)
-            if not chain:
-                continue
-            calls = [c for c in chain if c.get("option_type") == "call"]
-            puts  = [c for c in chain if c.get("option_type") == "put"]
-            all_calls.extend(calls)
-            all_puts.extend(puts)
-
-            # Collect volume for spike detection
-            vols = [c.get("volume", 0) or 0 for c in chain]
-            avg_volumes.extend(vols)
-
-        if not all_calls and not all_puts:
-            return self._empty_flow()
-
-        # Put/Call ratio by volume
-        call_vol = sum(c.get("volume", 0) or 0 for c in all_calls)
-        put_vol  = sum(c.get("volume", 0) or 0 for c in all_puts)
-        pc_ratio = round(put_vol / call_vol, 2) if call_vol > 0 else 99.0
-
-        # OI skew — is open interest concentrated in calls?
-        call_oi = sum(c.get("open_interest", 0) or 0 for c in all_calls)
-        put_oi  = sum(c.get("open_interest", 0) or 0 for c in all_puts)
-        oi_skew = "calls" if call_oi > put_oi * 1.2 else "puts" if put_oi > call_oi * 1.2 else "neutral"
-
-        # Volume spike — flag any single contract with outsized volume
-        # (proxy for sweep/block activity)
-        max_single_vol = max((c.get("volume", 0) or 0 for c in all_calls + all_puts), default=0)
-        avg_vol = (sum(avg_volumes) / len(avg_volumes)) if avg_volumes else 1
-        vol_spike = max_single_vol > avg_vol * 3
-
-        # Volume ratio — total options vol vs average
-        total_vol = call_vol + put_vol
-        vol_ratio = round(total_vol / (avg_vol * len(avg_volumes) + 1), 2)
-
-        return {
-            "put_call_ratio": pc_ratio,
-            "call_volume":    call_vol,
-            "put_volume":     put_vol,
-            "call_oi":        call_oi,
-            "put_oi":         put_oi,
-            "oi_skew":        oi_skew,
-            "vol_spike":      vol_spike,
-            "vol_ratio":      vol_ratio,
-            "sweep_count":    1 if vol_spike else 0,  # sweep proxy
-            "bullish_flow":   pc_ratio < 0.7 and oi_skew != "puts",
-        }
 
     def get_unusual_activity(self, symbol: str) -> dict:
-        """
-        Wrapper kept for API compatibility with pipeline.py.
-        Tradier flow data is all in get_flow_for_ticker.
-        """
-        return {}
+        flow = self.get_flow_for_ticker(symbol)
+        total = flow.get("total_vol", 0)
+        return {
+            "unusual": total > 500 and flow.get("put_call_ratio", 1) != 1,
+            "sweep_count": 0,
+            "total_unusual": 1 if total > 500 else 0,
+        }
 
-    def _get_expirations(self, symbol: str) -> list:
-        try:
-            url  = f"{self.base}/markets/options/expirations"
-            resp = self.session.get(url, params={"symbol": symbol, "includeAllRoots": "true"})
-            if resp.status_code != 200:
-                return []
-            data = resp.json()
-            exps = data.get("expirations", {}).get("date", [])
-            return exps if isinstance(exps, list) else [exps]
-        except:
-            return []
-
-    def _get_chain(self, symbol: str, expiration: str) -> list:
-        try:
-            url  = f"{self.base}/markets/options/chains"
-            resp = self.session.get(url, params={
-                "symbol":     symbol,
-                "expiration": expiration,
-                "greeks":     "false",
-            })
-            if resp.status_code != 200:
-                return []
-            data    = resp.json()
-            options = data.get("options", {}).get("option", [])
-            return options if isinstance(options, list) else [options]
-        except:
-            return []
+    def _nearest_expiry(self) -> str:
+        from datetime import date, timedelta
+        d = date.today()
+        # Find next Friday
+        days_ahead = 4 - d.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        return (d + timedelta(days=days_ahead)).isoformat()
 
     def _empty_flow(self) -> dict:
         return {
-            "put_call_ratio": 1.0,
-            "call_volume":    0,
-            "put_volume":     0,
-            "call_oi":        0,
-            "put_oi":         0,
-            "oi_skew":        "neutral",
-            "vol_spike":      False,
-            "vol_ratio":      1.0,
-            "sweep_count":    0,
-            "bullish_flow":   False,
+            "call_vol": 0, "put_vol": 0, "total_vol": 0,
+            "call_pct": 50, "bullish_flow": False, "put_call_ratio": 1.0,
         }
