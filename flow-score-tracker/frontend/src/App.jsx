@@ -609,6 +609,8 @@ export default function App() {
 
   const [scanning, setScanning] = useState(false);
   const [scanningMarket, setScanningMarket] = useState(false);
+
+  const runScan = async () => {
     setScanning(true);
     try {
       await fetch(`${API_BASE}/api/scan/weekly`, { method: "POST" });
