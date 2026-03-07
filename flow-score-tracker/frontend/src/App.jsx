@@ -669,7 +669,7 @@ export default function App() {
           )}
           <button onClick={() => window.open(`${API_BASE}/api/export/scores`, "_blank")} style={btnStyle("#1a1a2e", "#888")}>↓ CSV</button>
           <button onClick={runBothScanners} disabled={scanningMarket}
-            style={btnStyle(scanningMarket ? "#1a1a2e" : "#1a1a3e", scanningMarket ? "#555" : "#7b9fff")}>
+            style={btnStyle(scanningMarket ? "#1a1a2e" : "#7b9fff", scanningMarket ? "#555" : "#000")}>
             {scanningMarket ? "⟳ Scanning..." : "▶ Run Both Scanners"}
           </button>
           <button onClick={runScan} disabled={scanning} style={btnStyle(scanning ? "#1a1a2e" : "#00d4aa", scanning ? "#555" : "#000")}>
