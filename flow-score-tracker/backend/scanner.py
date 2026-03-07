@@ -128,6 +128,13 @@ def get_top_sectors(top_n: int = 3):
 # ============================================================
 
 def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int = 25) -> list:
+    """
+    50-Day Breakout Scanner filters applied within each top sector:
+    - Optionable (options_volume > 1000)
+    - Short interest > 1%
+    - Price within 0-3% below 52-week high (near highs)
+    - Price above SMA50
+    """
     tv_sectors = [k for k, v in TV_SECTOR_MAP.items() if v == sector_name]
     if not tv_sectors:
         return []
@@ -137,17 +144,22 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
             .select(
                 'name', 'description', 'close', 'SMA200', 'SMA50',
                 'Perf.3M', 'Perf.1M', 'Perf.W',
-                'relative_volume_10d_calc', 'market_cap_basic', 'sector'
+                'relative_volume_10d_calc', 'market_cap_basic', 'sector',
+                'High.All', 'short_ratio',
+                'option_volume', '52WeekHigh'
             )
             .set_markets('america')
             .where(
                 col('sector').isin(tv_sectors),
-                col('market_cap_basic') > 2e9,
+                col('market_cap_basic') > 1e9,          # $1B+ (o1000 = optionable large enough)
                 col('exchange').isin(['NASDAQ', 'NYSE']),
                 col('is_primary') == True,
+                col('close') > col('SMA50'),             # above 50MA (nos50)
+                col('option_volume') > 1000,             # options volume > 1000 (o1000)
+                col('short_ratio') > 1,                  # short interest ratio > 1 (optionshort o1)
             )
-            .order_by('market_cap_basic', ascending=False)
-            .limit(150)
+            .order_by('Perf.3M', ascending=False)
+            .limit(200)
             .get_scanner_data()
         )
     except Exception as e:
@@ -163,6 +175,13 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
         perf_1m = safe_float(row.get('Perf.1M'))
         rel_vol = safe_float(row.get('relative_volume_10d_calc'))
         mktcap = safe_float(row.get('market_cap_basic'))
+        high_52w = safe_float(row.get('52WeekHigh'))
+
+        # b0to3h: price within 0-3% below 52w high
+        if high_52w > 0:
+            pct_from_high = (high_52w - price) / high_52w * 100
+            if pct_from_high > 3.0:
+                continue  # skip — too far from 52w high
 
         stocks.append({
             "ticker": str(row['name']),
@@ -171,15 +190,96 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
             "ma200": round(ma200, 2),
             "ma50": round(ma50, 2),
             "above_200ma": bool(price > ma200) if ma200 else None,
-            "above_50ma": bool(price > ma50) if ma50 else None,
+            "above_50ma": True,  # filtered above
             "perf_3m": round(perf_3m, 2),
             "perf_1m": round(perf_1m, 2),
             "rs_vs_etf": round(perf_3m - etf_perf_3m, 2),
             "rel_vol": round(rel_vol, 2),
             "mktcap_b": round(mktcap / 1e9, 1),
+            "scanner": "50day",
         })
 
     stocks.sort(key=lambda x: x["rs_vs_etf"], reverse=True)
+    return stocks[:limit]
+
+
+# ============================================================
+# BIG BLUE SKY SCANNER (standalone — no sector filter)
+# ============================================================
+
+def run_big_blue_sky_scanner(limit: int = 50) -> list:
+    """
+    Big Blue Sky Scanner:
+    - Mid-cap and under (market cap < $10B)
+    - Price < $500
+    - New 52-week high (price within 1% of 52w high)
+    - Above SMA50
+    - Optionable (options volume > 1)
+    - Short interest > 1%
+    """
+    print("  Running Big Blue Sky Scanner...")
+    try:
+        _, df = (Query()
+            .select(
+                'name', 'description', 'close', 'SMA200', 'SMA50',
+                'Perf.3M', 'Perf.1M', 'Perf.W',
+                'relative_volume_10d_calc', 'market_cap_basic', 'sector',
+                'short_ratio', 'option_volume', '52WeekHigh'
+            )
+            .set_markets('america')
+            .where(
+                col('market_cap_basic') < 10e9,          # mid-cap and under
+                col('market_cap_basic') > 3e8,           # at least $300M
+                col('close') < 500,                      # under $500
+                col('exchange').isin(['NASDAQ', 'NYSE']),
+                col('is_primary') == True,
+                col('close') > col('SMA50'),             # above 50MA
+                col('option_volume') > 1,                # optionable
+                col('short_ratio') > 1,                  # short interest > 1
+            )
+            .order_by('Perf.3M', ascending=False)
+            .limit(300)
+            .get_scanner_data()
+        )
+    except Exception as e:
+        print(f"    Big Blue Sky screener error: {e}")
+        return []
+
+    stocks = []
+    for _, row in df.iterrows():
+        price = safe_float(row.get('close'))
+        ma200 = safe_float(row.get('SMA200'))
+        ma50 = safe_float(row.get('SMA50'))
+        perf_3m = safe_float(row.get('Perf.3M'))
+        perf_1m = safe_float(row.get('Perf.1M'))
+        rel_vol = safe_float(row.get('relative_volume_10d_calc'))
+        mktcap = safe_float(row.get('market_cap_basic'))
+        high_52w = safe_float(row.get('52WeekHigh'))
+
+        # nh: new 52-week high — price within 1% of 52w high
+        if high_52w > 0:
+            pct_from_high = (high_52w - price) / high_52w * 100
+            if pct_from_high > 1.0:
+                continue  # not at new high
+
+        stocks.append({
+            "ticker": str(row['name']),
+            "name": str(row.get('description') or row['name']),
+            "price": round(price, 2),
+            "ma200": round(ma200, 2),
+            "ma50": round(ma50, 2),
+            "above_200ma": bool(price > ma200) if ma200 else None,
+            "above_50ma": True,
+            "perf_3m": round(perf_3m, 2),
+            "perf_1m": round(perf_1m, 2),
+            "rs_vs_etf": round(perf_3m, 2),  # no sector ETF baseline; use abs 3M perf
+            "rel_vol": round(rel_vol, 2),
+            "mktcap_b": round(mktcap / 1e9, 1),
+            "scanner": "bigbluesky",
+            "sector": str(row.get('sector') or ''),
+        })
+
+    stocks.sort(key=lambda x: x["perf_3m"], reverse=True)
     return stocks[:limit]
 
 
@@ -236,12 +336,13 @@ def run_scanner() -> dict:
     print(f"[{datetime.now()}] Running Market Scanner...")
     sb = get_supabase()
 
+    # ── 50-DAY BREAKOUT: sector-filtered ──
     print("  Fetching sector ETF data...")
     try:
         top_sectors, all_sectors = get_top_sectors(top_n=3)
     except Exception as e:
         print(f"  Sector fetch error: {e}")
-        return {}
+        top_sectors, all_sectors = [], []
 
     print(f"  Top sectors: {[s['sector'] for s in top_sectors]}")
 
@@ -262,15 +363,27 @@ def run_scanner() -> dict:
             print(f"    Error: {e}")
             sector_stocks[sector] = []
 
+    # ── BIG BLUE SKY ──
+    try:
+        big_blue_sky = run_big_blue_sky_scanner()
+        all_top_tickers.extend([s["ticker"] for s in big_blue_sky[:20]])
+        print(f"  Big Blue Sky: {len(big_blue_sky)} stocks found")
+    except Exception as e:
+        print(f"  Big Blue Sky error: {e}")
+        big_blue_sky = []
+
+    # ── UNUSUAL OPTIONS ──
     print("  Checking unusual options activity...")
     unusual = get_unusual_options(list(dict.fromkeys(all_top_tickers)))
     print(f"  Found {len(unusual)} unusual activity flags")
 
-    # Fetch all scores from Supabase and build a ticker -> score map
+    # ── FETCH SCORES from Supabase ──
     print("  Fetching scores from Supabase...")
     score_map = {}
     try:
         all_tickers = list({t for stocks in sector_stocks.values() for t in [s["ticker"] for s in stocks]})
+        all_tickers += [s["ticker"] for s in big_blue_sky]
+        all_tickers = list(set(all_tickers))
         if all_tickers:
             rows = sb.table("weekly_scores").select("ticker, flow_score, rating").in_("ticker", all_tickers).execute()
             for row in (rows.data or []):
@@ -282,12 +395,17 @@ def run_scanner() -> dict:
     except Exception as e:
         print(f"  Score fetch error: {e}")
 
-    # Merge scores into sector_stocks
+    # Merge scores
     for sector in sector_stocks:
         for stock in sector_stocks[sector]:
             s = score_map.get(stock["ticker"], {})
             stock["flow_score"] = s.get("flow_score")
             stock["rating"] = s.get("rating")
+
+    for stock in big_blue_sky:
+        s = score_map.get(stock["ticker"], {})
+        stock["flow_score"] = s.get("flow_score")
+        stock["rating"] = s.get("rating")
 
     output = {
         "run_date": date.today().isoformat(),
@@ -295,6 +413,7 @@ def run_scanner() -> dict:
         "top_sectors": top_sectors,
         "all_sectors": all_sectors,
         "sector_stocks": sector_stocks,
+        "big_blue_sky": big_blue_sky,
         "unusual_activity": unusual,
     }
 
