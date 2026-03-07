@@ -568,7 +568,6 @@ export default function App() {
   const [watchlist, setWatchlist] = useState([]);
   const [selectedTicker, setSelectedTicker] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [scanning, setScanning] = useState(false);
   const [newTicker, setNewTicker] = useState("");
   const [newSector, setNewSector] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -608,12 +607,37 @@ export default function App() {
     fetchWatchlist();
   };
 
-  const runScan = async () => {
+  const [scanning, setScanning] = useState(false);
+  const [scanningMarket, setScanningMarket] = useState(false);
     setScanning(true);
     try {
       await fetch(`${API_BASE}/api/scan/weekly`, { method: "POST" });
       setTimeout(async () => { await fetchScores(); setScanning(false); }, 3000);
     } catch (e) { setScanning(false); }
+  };
+
+  const runBothScanners = async () => {
+    setScanningMarket(true);
+    try {
+      await fetch(`${API_BASE}/api/scanner/run`, { method: "POST" });
+      // Poll until scores appear
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        try {
+          const res = await fetch(`${API_BASE}/api/scanner/results`);
+          const json = await res.json();
+          const data = json.data || {};
+          const hasScores =
+            Object.values(data.sector_stocks || {}).flat().some(s => s.flow_score != null) ||
+            (data.big_blue_sky || []).some(s => s.flow_score != null);
+          if (hasScores || attempts >= 12) {
+            clearInterval(poll);
+            setScanningMarket(false);
+          }
+        } catch { }
+      }, 15000);
+    } catch (e) { setScanningMarket(false); }
   };
 
   const tabs = [
@@ -644,6 +668,10 @@ export default function App() {
             </div>
           )}
           <button onClick={() => window.open(`${API_BASE}/api/export/scores`, "_blank")} style={btnStyle("#1a1a2e", "#888")}>↓ CSV</button>
+          <button onClick={runBothScanners} disabled={scanningMarket}
+            style={btnStyle(scanningMarket ? "#1a1a2e" : "#1a1a3e", scanningMarket ? "#555" : "#7b9fff")}>
+            {scanningMarket ? "⟳ Scanning..." : "▶ Run Both Scanners"}
+          </button>
           <button onClick={runScan} disabled={scanning} style={btnStyle(scanning ? "#1a1a2e" : "#00d4aa", scanning ? "#555" : "#000")}>
             {scanning ? "Scoring..." : "▶ Score Watchlist"}
           </button>
