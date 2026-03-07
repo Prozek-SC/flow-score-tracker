@@ -47,7 +47,7 @@ def scanner_job():
     try:
         results = run_scanner()
 
-        # Score top 10 stocks across all sectors by RS vs ETF
+        # Score top 10 per sector + top 10 Big Blue Sky
         sector_stocks = results.get("sector_stocks", {})
         top_sectors = results.get("top_sectors", [])
         top10 = []
@@ -57,6 +57,10 @@ def scanner_job():
             top_in_sector = sorted(stocks, key=lambda s: s.get("rs_vs_etf", 0), reverse=True)[:10]
             for s in top_in_sector:
                 top10.append({"ticker": s["ticker"], "sector": sname, "rs": s.get("rs_vs_etf", 0)})
+
+        bbs = results.get("big_blue_sky", [])[:10]
+        for s in bbs:
+            top10.append({"ticker": s["ticker"], "sector": s.get("sector", ""), "rs": s.get("perf_3m", 0)})
 
         if top10:
             print(f"  Scoring {len(top10)} stocks (top 10/sector): {[t['ticker'] for t in top10]}")
@@ -314,7 +318,7 @@ def trigger_scanner():
         try:
             results = run_scanner()
 
-            # Score top 10 by RS across all sectors
+            # Score top 10 per sector + top 10 Big Blue Sky
             sector_stocks = results.get("sector_stocks", {})
             top_sectors = results.get("top_sectors", [])
             top10 = []
@@ -325,8 +329,12 @@ def trigger_scanner():
                 for s in top_in_sector:
                     top10.append({"ticker": s["ticker"], "sector": sname, "rs": s.get("rs_vs_etf", 0)})
 
+            bbs = results.get("big_blue_sky", [])[:10]
+            for s in bbs:
+                top10.append({"ticker": s["ticker"], "sector": s.get("sector", ""), "rs": s.get("perf_3m", 0)})
+
             if top10:
-                print(f"  Scoring {len(top10)} stocks (top 10/sector): {[t['ticker'] for t in top10]}")
+                print(f"  Scoring {len(top10)} stocks (top 10/sector + BBS): {[t['ticker'] for t in top10]}")
                 scored = score_tickers(top10)
                 score_map = {r["ticker"]: r for r in scored}
                 for sname, stocks in sector_stocks.items():
@@ -334,6 +342,10 @@ def trigger_scanner():
                         if stock["ticker"] in score_map:
                             stock["flow_score"] = score_map[stock["ticker"]].get("flow_score")
                             stock["rating"] = score_map[stock["ticker"]].get("rating")
+                for stock in results.get("big_blue_sky", []):
+                    if stock["ticker"] in score_map:
+                        stock["flow_score"] = score_map[stock["ticker"]].get("flow_score")
+                        stock["rating"] = score_map[stock["ticker"]].get("rating")
 
                 # Re-save to Supabase with scores merged in
                 sb = get_sb()
