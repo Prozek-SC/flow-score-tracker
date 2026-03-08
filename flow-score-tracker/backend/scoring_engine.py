@@ -2,6 +2,15 @@
 Flow Score Scoring Engine
 Three Pillars: Capital Flow (40pts) | Trend (30pts) | Momentum (30pts)
 Total: 0-100
+
+CHANGELOG (2026-03-08):
+- Momentum pillar rebuilt to use Finviz perf fields (perf_week/month/quarter/half/year)
+  since bars=[] always. ROC, RS, Accel, MACD-proxy, and multi-period trend now all
+  derive from Finviz data. ADX removed (requires bars).
+- L2 sector scoring rebalanced: ETF dollar flows now primary signal (0-9pts),
+  sector rank secondary (0-4pts), YTD perf tertiary (0-2pts). Max still 15.
+- calculate_sector_flow_score: weekly_flow threshold bumped to match real ETF flow
+  magnitudes ($500M-$1B range for leading sectors per Flow Map reports).
 """
 import numpy as np
 from datetime import datetime
@@ -52,48 +61,62 @@ def score_capital_flow_level2(sector_etf_perf_ytd: float, sector_etf_flow_weekly
                                sector_rank: int, total_sectors: int = 11) -> dict:
     """
     Level 2: Is the sector receiving institutional inflows?
-    sector_etf_perf_ytd: YTD performance of sector ETF (%)
-    sector_etf_flow_weekly: weekly ETF flow ($M)
-    sector_rank: rank among 11 sectors (1=best)
+
+    Rebalanced scoring (max 15):
+      ETF dollar flow (0-9): primary signal — actual institutional buying
+      Sector rank    (0-4): confirms relative sector leadership
+      YTD perf       (0-2): long-term trend confirmation
     """
     score = 0
     details = []
 
-    # Rank-based scoring
+    # --- ETF Dollar Flow: primary signal (0-9) ---
+    # Thresholds calibrated to real Flow Map data:
+    # XLE $934M = elite | XLU $650M = strong | XLB $30M = modest
+    if sector_etf_flow_weekly >= 800:
+        score += 9
+        details.append(f"+${sector_etf_flow_weekly:.0f}M inflows (elite)")
+    elif sector_etf_flow_weekly >= 400:
+        score += 7
+        details.append(f"+${sector_etf_flow_weekly:.0f}M inflows (strong)")
+    elif sector_etf_flow_weekly >= 100:
+        score += 5
+        details.append(f"+${sector_etf_flow_weekly:.0f}M inflows (moderate)")
+    elif sector_etf_flow_weekly > 0:
+        score += 2
+        details.append(f"+${sector_etf_flow_weekly:.0f}M inflows (light)")
+    elif sector_etf_flow_weekly >= -200:
+        score += 0
+        details.append(f"${sector_etf_flow_weekly:.0f}M outflows (slight)")
+    else:
+        score += 0
+        details.append(f"${sector_etf_flow_weekly:.0f}M outflows (heavy)")
+
+    # --- Sector Rank (0-4) ---
     if sector_rank <= 2:
-        score += 8
+        score += 4
         details.append(f"Sector rank #{sector_rank}/11 (elite)")
     elif sector_rank <= 4:
-        score += 6
+        score += 3
         details.append(f"Sector rank #{sector_rank}/11 (strong)")
     elif sector_rank <= 6:
-        score += 3
+        score += 1
         details.append(f"Sector rank #{sector_rank}/11 (neutral)")
     else:
         details.append(f"Sector rank #{sector_rank}/11 (weak)")
 
-    # YTD performance
+    # --- YTD Performance (0-2): long-term trend confirmation ---
     if sector_etf_perf_ytd > 10:
-        score += 4
+        score += 2
         details.append(f"ETF +{sector_etf_perf_ytd:.1f}% YTD")
     elif sector_etf_perf_ytd > 5:
-        score += 3
+        score += 1
         details.append(f"ETF +{sector_etf_perf_ytd:.1f}% YTD")
     elif sector_etf_perf_ytd > 0:
-        score += 1
+        score += 0
         details.append(f"ETF +{sector_etf_perf_ytd:.1f}% YTD")
     else:
         details.append(f"ETF {sector_etf_perf_ytd:.1f}% YTD")
-
-    # Flow direction
-    if sector_etf_flow_weekly > 500:
-        score += 3
-        details.append(f"+${sector_etf_flow_weekly:.0f}M inflows")
-    elif sector_etf_flow_weekly > 0:
-        score += 1
-        details.append(f"+${sector_etf_flow_weekly:.0f}M inflows")
-    else:
-        details.append(f"${sector_etf_flow_weekly:.0f}M outflows")
 
     return {
         "score": min(15, score),
@@ -105,7 +128,8 @@ def score_capital_flow_level2(sector_etf_perf_ytd: float, sector_etf_flow_weekly
 def score_capital_flow_level3(bars: list, finviz_data: dict, uw_flow: dict) -> dict:
     """
     Level 3: Is THIS stock receiving direct institutional flow?
-    Combines: volume accumulation, institutional ownership change, options flow
+    Combines: institutional ownership change, relative volume, options flow.
+    (bars unused — kept for API compatibility)
     """
     score = 0
     details = []
@@ -124,33 +148,19 @@ def score_capital_flow_level3(bars: list, finviz_data: dict, uw_flow: dict) -> d
     elif inst_trans < -3:
         details.append(f"Inst. selling {inst_trans:.1f}%")
 
-    # Volume accumulation on up days
-    if bars and len(bars) >= 20:
-        up_vols, down_vols = [], []
-        for i in range(1, min(21, len(bars))):
-            try:
-                close = float(bars[i].get("Close", 0))
-                prev = float(bars[i-1].get("Close", 0))
-                vol = float(bars[i].get("TotalVolume", 0))
-                if close > prev:
-                    up_vols.append(vol)
-                elif close < prev:
-                    down_vols.append(vol)
-            except:
-                continue
+    # Relative volume (Finviz) — elevated vol = institutional activity
+    rel_vol = finviz_data.get("relative_volume", 1.0)
+    if rel_vol >= 2.0:
+        score += 5
+        details.append(f"RelVol {rel_vol:.1f}x (heavy buying)")
+    elif rel_vol >= 1.5:
+        score += 3
+        details.append(f"RelVol {rel_vol:.1f}x (above avg)")
+    elif rel_vol >= 1.2:
+        score += 1
+        details.append(f"RelVol {rel_vol:.1f}x (slight pickup)")
 
-        if up_vols and down_vols:
-            ratio = np.mean(up_vols) / np.mean(down_vols)
-            if ratio >= 1.5:
-                score += 5
-                details.append(f"Vol ratio {ratio:.1f}x (accumulation)")
-            elif ratio >= 1.2:
-                score += 3
-                details.append(f"Vol ratio {ratio:.1f}x (slight accum)")
-            elif ratio < 0.8:
-                details.append(f"Vol ratio {ratio:.1f}x (distribution)")
-
-    # Options flow (Unusual Whales)
+    # Options flow (Tradier/Unusual Whales)
     pc_ratio = uw_flow.get("put_call_ratio", 1.0)
     sweeps = uw_flow.get("sweep_count", 0)
     if pc_ratio < 0.5 and sweeps >= 5:
@@ -158,12 +168,13 @@ def score_capital_flow_level3(bars: list, finviz_data: dict, uw_flow: dict) -> d
         details.append(f"Bullish flow + {sweeps} sweeps")
     elif pc_ratio < 0.7:
         score += 2
-        details.append(f"Call-heavy flow P/C {pc_ratio}")
+        details.append(f"Call-heavy flow P/C {pc_ratio:.2f}")
 
     return {
         "score": min(15, score),
         "detail": " · ".join(details) or "No accumulation signal",
-        "raw": {"inst_trans": inst_trans, "pc_ratio": pc_ratio, "sweeps": sweeps}
+        "raw": {"inst_trans": inst_trans, "pc_ratio": pc_ratio, "sweeps": sweeps,
+                "rel_vol": rel_vol}
     }
 
 
@@ -186,7 +197,7 @@ def score_capital_flow_pillar(l1: dict, l2: dict, l3: dict) -> dict:
 def score_trend_pillar(price: float, ma20: float, ma50: float, ma200: float, bars: list) -> dict:
     """
     Trend scoring across three timeframes.
-    Each MA worth 10 points. Score also considers distance and slope.
+    Each MA worth 10 points. Score also considers distance above MA.
     """
     score = 0
     details = []
@@ -213,21 +224,6 @@ def score_trend_pillar(price: float, ma20: float, ma50: float, ma200: float, bar
         score = min(30, score + 2)
         details.append("Golden cross")
 
-    # Higher highs / higher lows check
-    if bars and len(bars) >= 40:
-        try:
-            first_half = bars[-40:-20]
-            second_half = bars[-20:]
-            h1_high = max(float(b.get("High", 0)) for b in first_half)
-            h2_high = max(float(b.get("High", 0)) for b in second_half)
-            h1_low = min(float(b.get("Low", 0)) for b in first_half)
-            h2_low = min(float(b.get("Low", 0)) for b in second_half)
-            if h2_high > h1_high and h2_low > h1_low:
-                score = min(30, score + 2)
-                details.append("HH/HL confirmed")
-        except:
-            pass
-
     return {
         "score": min(30, score),
         "detail": " · ".join(details),
@@ -240,196 +236,105 @@ def score_trend_pillar(price: float, ma20: float, ma50: float, ma200: float, bar
 
 # ============================================================
 # PILLAR 3: MOMENTUM (30 points total)
-# 5 components, each worth up to 6pts → max 30
 #
-# Rate of Change    (0-6)  — 63-day price momentum magnitude
-# Relative Strength (0-6)  — outperformance vs SPY + sector
-# Acceleration      (0-6)  — short-term momentum > prior period
-# MACD              (0-6)  — trend direction + histogram expansion
-# ADX               (0-6)  — trend strength (does it have legs?)
+# All 5 components use Finviz perf fields since bars=[]:
+#  1. Rate of Change    (0-6)  — perf_quarter magnitude
+#  2. Relative Strength (0-6)  — outperformance vs SPY
+#  3. Acceleration      (0-6)  — short vs long-term perf
+#  4. Multi-period trend(0-6)  — perf_week/month/quarter all positive
+#  5. Sector alpha      (0-6)  — outperformance vs sector ETF
 # ============================================================
-
-def _ema(data: list, period: int) -> np.ndarray:
-    """Exponential moving average"""
-    k = 2 / (period + 1)
-    result = [data[0]]
-    for i in range(1, len(data)):
-        result.append(data[i] * k + result[-1] * (1 - k))
-    return np.array(result)
-
 
 def score_momentum_pillar(bars: list, finviz_data: dict,
                            spy_perf_63d: float, sector_perf_63d: float) -> dict:
     """
-    Momentum: ROC + RS + Acceleration + MACD + ADX
-    Each component scored 0-6. Total max = 30.
+    Momentum scored entirely from Finviz perf fields.
+    bars parameter kept for API compatibility but not used.
     """
     scores = {}
     details = []
 
-    closes = highs = lows = np.array([])
-    if bars and len(bars) >= 30:
-        try:
-            closes = np.array([float(b.get("Close", 0)) for b in bars])
-            highs  = np.array([float(b.get("High",  0)) for b in bars])
-            lows   = np.array([float(b.get("Low",   0)) for b in bars])
-        except:
-            pass
+    perf_week    = finviz_data.get("perf_week", 0) or 0
+    perf_month   = finviz_data.get("perf_month", 0) or 0
+    perf_quarter = finviz_data.get("perf_quarter", 0) or 0
+    perf_half    = finviz_data.get("perf_half", 0) or 0
+    perf_year    = finviz_data.get("perf_year", 0) or 0
 
     # -------------------------------------------------------
-    # 1. RATE OF CHANGE (0-6)
+    # 1. RATE OF CHANGE (0-6) — 63-day (quarter) magnitude
     # -------------------------------------------------------
-    roc_score = 0
-    if len(closes) >= 63:
-        try:
-            roc_63 = (closes[-1] - closes[-63]) / closes[-63] * 100
-            roc_21 = (closes[-1] - closes[-21]) / closes[-21] * 100
-            if roc_63 > 30:   roc_score = 6
-            elif roc_63 > 20: roc_score = 5
-            elif roc_63 > 10: roc_score = 4
-            elif roc_63 > 5:  roc_score = 3
-            elif roc_63 > 0:  roc_score = 1
-            details.append(f"ROC 63d:{roc_63:.1f}% 21d:{roc_21:.1f}%")
-        except:
-            details.append("ROC: calc error")
-    else:
-        details.append("ROC: insufficient data")
+    roc = perf_quarter
+    if roc > 30:      roc_score = 6
+    elif roc > 20:    roc_score = 5
+    elif roc > 10:    roc_score = 4
+    elif roc > 5:     roc_score = 3
+    elif roc > 0:     roc_score = 1
+    else:             roc_score = 0
     scores["roc"] = roc_score
+    details.append(f"ROC 63d:{roc:+.1f}%")
 
     # -------------------------------------------------------
-    # 2. RELATIVE STRENGTH vs SPY + Sector (0-6)
+    # 2. RELATIVE STRENGTH vs SPY (0-6)
     # -------------------------------------------------------
     rs_score = 0
-    perf_63d = finviz_data.get("perf_quarter", 0)
-    if perf_63d and spy_perf_63d is not None:
-        try:
-            outperf_spy    = perf_63d - spy_perf_63d
-            outperf_sector = perf_63d - (sector_perf_63d or 0)
-            if outperf_spy > 10 and outperf_sector > 5:
-                rs_score = 6
-                details.append(f"RS: +{outperf_spy:.1f}% SPY +{outperf_sector:.1f}% sector (elite)")
-            elif outperf_spy > 5:
-                rs_score = 4
-                details.append(f"RS: +{outperf_spy:.1f}% vs SPY (strong)")
-            elif outperf_spy > 0:
-                rs_score = 2
-                details.append(f"RS: +{outperf_spy:.1f}% vs SPY (positive)")
-            elif outperf_spy > -5:
-                rs_score = 1
-                details.append(f"RS: {outperf_spy:.1f}% vs SPY (lagging)")
-            else:
-                details.append(f"RS: {outperf_spy:.1f}% vs SPY (weak)")
-        except:
-            details.append("RS: calc error")
+    if spy_perf_63d is not None and perf_quarter:
+        outperf = perf_quarter - spy_perf_63d
+        if outperf > 15:      rs_score = 6
+        elif outperf > 10:    rs_score = 5
+        elif outperf > 5:     rs_score = 4
+        elif outperf > 0:     rs_score = 2
+        elif outperf > -5:    rs_score = 1
+        details.append(f"RS vs SPY:{outperf:+.1f}%")
     else:
-        details.append("RS: no data")
+        details.append("RS: no SPY data")
     scores["rs"] = rs_score
 
     # -------------------------------------------------------
-    # 3. ACCELERATION — short-term vs prior period (0-6)
+    # 3. ACCELERATION — short-term vs long-term perf (0-6)
+    # perf_month (21d) vs perf_half (126d) as proxy
     # -------------------------------------------------------
     accel_score = 0
-    if len(closes) >= 63:
-        try:
-            mom_recent = (closes[-1]  - closes[-21]) / closes[-21] * 100
-            mom_prior  = (closes[-42] - closes[-63]) / closes[-63] * 100
-            accel = mom_recent - mom_prior
-            if accel > 10:   accel_score = 6
-            elif accel > 5:  accel_score = 4
-            elif accel > 0:  accel_score = 2
-            elif accel > -5: accel_score = 1
-            details.append(f"Accel: {'+' if accel >= 0 else ''}{accel:.1f}pts")
-        except:
-            details.append("Accel: calc error")
+    if perf_month and perf_half:
+        # annualize to compare apples-to-apples
+        monthly_rate = perf_month
+        half_monthly_rate = perf_half / 6  # avg monthly over 6 months
+        accel = monthly_rate - half_monthly_rate
+        if accel > 5:        accel_score = 6
+        elif accel > 2:      accel_score = 4
+        elif accel > 0:      accel_score = 2
+        elif accel > -2:     accel_score = 1
+        details.append(f"Accel:{accel:+.1f}pts")
     else:
-        details.append("Accel: insufficient data")
+        details.append("Accel: no data")
     scores["accel"] = accel_score
 
     # -------------------------------------------------------
-    # 4. MACD (12, 26, 9) — trend direction + histogram (0-6)
+    # 4. MULTI-PERIOD TREND — all timeframes pointing up (0-6)
     # -------------------------------------------------------
-    macd_score = 0
-    if len(closes) >= 35:
-        try:
-            ema12 = _ema(closes.tolist(), 12)
-            ema26 = _ema(closes.tolist(), 26)
-            macd_line   = ema12 - ema26
-            signal_line = _ema(macd_line.tolist(), 9)
-            histogram   = macd_line - signal_line
+    trend_score = 0
+    positives = sum(1 for p in [perf_week, perf_month, perf_quarter, perf_half, perf_year] if p > 0)
+    if positives == 5:        trend_score = 6
+    elif positives >= 4:      trend_score = 4
+    elif positives >= 3:      trend_score = 2
+    elif positives >= 2:      trend_score = 1
+    details.append(f"Multi-period:{positives}/5 green")
+    scores["multi"] = trend_score
 
-            macd_val  = float(macd_line[-1])
-            hist_val  = float(histogram[-1])
-            hist_prev = float(histogram[-2]) if len(histogram) > 1 else 0
-            hist_expanding = hist_val > hist_prev
-
-            if macd_val > 0 and hist_val > 0 and hist_expanding:
-                macd_score = 6   # bullish + expanding histogram
-                details.append(f"MACD: bullish+expanding (hist {hist_val:.3f})")
-            elif macd_val > 0 and hist_val > 0:
-                macd_score = 4   # bullish but slowing
-                details.append(f"MACD: bullish (hist {hist_val:.3f})")
-            elif macd_val > 0:
-                macd_score = 2   # above signal but histogram negative
-                details.append(f"MACD: above zero, fading")
-            elif hist_val > hist_prev:
-                macd_score = 1   # below zero but improving
-                details.append(f"MACD: bearish, improving")
-            else:
-                details.append(f"MACD: bearish (hist {hist_val:.3f})")
-        except Exception as e:
-            details.append(f"MACD: calc error")
+    # -------------------------------------------------------
+    # 5. SECTOR ALPHA — outperformance vs sector ETF (0-6)
+    # -------------------------------------------------------
+    alpha_score = 0
+    if sector_perf_63d is not None and perf_quarter:
+        sector_alpha = perf_quarter - sector_perf_63d
+        if sector_alpha > 15:      alpha_score = 6
+        elif sector_alpha > 8:     alpha_score = 5
+        elif sector_alpha > 3:     alpha_score = 4
+        elif sector_alpha > 0:     alpha_score = 2
+        elif sector_alpha > -5:    alpha_score = 1
+        details.append(f"Sector alpha:{sector_alpha:+.1f}%")
     else:
-        details.append("MACD: insufficient data")
-    scores["macd"] = macd_score
-
-    # -------------------------------------------------------
-    # 5. ADX (14) — trend strength (0-6)
-    # -------------------------------------------------------
-    adx_score = 0
-    if len(closes) >= 20 and len(highs) >= 20 and len(lows) >= 20:
-        try:
-            period = 14
-            tr_list, plus_dm_list, minus_dm_list = [], [], []
-            for i in range(1, len(closes)):
-                tr = max(highs[i] - lows[i],
-                         abs(highs[i] - closes[i-1]),
-                         abs(lows[i]  - closes[i-1]))
-                tr_list.append(tr)
-                h_diff = highs[i] - highs[i-1]
-                l_diff = lows[i-1] - lows[i]
-                plus_dm_list.append(h_diff if h_diff > l_diff and h_diff > 0 else 0)
-                minus_dm_list.append(l_diff if l_diff > h_diff and l_diff > 0 else 0)
-
-            atr       = _ema(tr_list, period)
-            plus_di   = 100 * _ema(plus_dm_list, period)  / (atr + 1e-9)
-            minus_di  = 100 * _ema(minus_dm_list, period) / (atr + 1e-9)
-            dx        = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9)
-            adx       = _ema(dx.tolist(), period)
-
-            adx_val      = float(adx[-1])
-            plus_di_val  = float(plus_di[-1])
-            minus_di_val = float(minus_di[-1])
-            bullish_di   = plus_di_val > minus_di_val
-
-            if adx_val >= 30 and bullish_di:
-                adx_score = 6
-                details.append(f"ADX: {adx_val:.1f} strong+bullish")
-            elif adx_val >= 25 and bullish_di:
-                adx_score = 4
-                details.append(f"ADX: {adx_val:.1f} trending+bullish")
-            elif adx_val >= 20:
-                adx_score = 2
-                details.append(f"ADX: {adx_val:.1f} developing")
-            elif adx_val >= 15:
-                adx_score = 1
-                details.append(f"ADX: {adx_val:.1f} weak trend")
-            else:
-                details.append(f"ADX: {adx_val:.1f} no trend")
-        except Exception as e:
-            details.append("ADX: calc error")
-    else:
-        details.append("ADX: insufficient data")
-    scores["adx"] = adx_score
+        details.append("Sector alpha: no data")
+    scores["alpha"] = alpha_score
 
     total = sum(scores.values())
 
@@ -440,8 +345,13 @@ def score_momentum_pillar(bars: list, finviz_data: dict,
             "roc_score":   scores["roc"],
             "rs_score":    scores["rs"],
             "accel_score": scores["accel"],
-            "macd_score":  scores["macd"],
-            "adx_score":   scores["adx"],
+            "multi_score": scores["multi"],
+            "alpha_score": scores["alpha"],
+            "perf_week":    perf_week,
+            "perf_month":   perf_month,
+            "perf_quarter": perf_quarter,
+            "perf_half":    perf_half,
+            "perf_year":    perf_year,
         }
     }
 
@@ -531,33 +441,44 @@ SECTOR_ETFS = {
     "Technology": "XLK",
 }
 
+
 def calculate_sector_flow_score(sector_name: str, etf_data: dict,
                                  equity_flow: float, equity_avg: float) -> dict:
-    """Calculate Flow Score for an entire sector ETF"""
-    ytd_perf = etf_data.get("perf_ytd", 0)
-    weekly_flow = etf_data.get("weekly_flow", 0)
-    price = etf_data.get("price", 0)
-    ma50 = etf_data.get("sma50", 0)
-    ma200 = etf_data.get("sma200", 0)
-    ma20 = etf_data.get("sma20", price)  # fallback
+    """
+    Sector-level Flow Score.
+    Uses actual ETF dollar flows from fund_flows table when available.
+    weekly_flow should be in $M (e.g. 934 for XLE's $934M inflow).
+    """
+    ytd_perf    = etf_data.get("perf_ytd", 0) or 0
+    weekly_flow = etf_data.get("weekly_flow", 0) or 0
+    price       = etf_data.get("price", 0) or 0
+    ma50        = etf_data.get("sma50", 0) or 0
+    ma200       = etf_data.get("sma200", 0) or 0
+    ma20        = etf_data.get("sma20", price) or price
 
-    # Simplified sector scoring
-    capital_score = min(40, max(0,
-        (10 if equity_flow > 0 else 0) +
-        (15 if ytd_perf > 10 else 10 if ytd_perf > 5 else 5 if ytd_perf > 0 else 0) +
-        (15 if weekly_flow > 500 else 10 if weekly_flow > 0 else 0)
-    ))
+    # Capital flow: equity environment + ETF flows
+    l1_equity = 10 if equity_flow > 0 else 0
+    # ETF inflow tiers calibrated to real data ($M)
+    if weekly_flow >= 800:      l2_flow = 15
+    elif weekly_flow >= 400:    l2_flow = 12
+    elif weekly_flow >= 100:    l2_flow = 8
+    elif weekly_flow >= 30:     l2_flow = 5
+    elif weekly_flow > 0:       l2_flow = 2
+    else:                       l2_flow = 0
+
+    capital_score = min(40, l1_equity + l2_flow +
+                        (15 if ytd_perf > 10 else 8 if ytd_perf > 5 else 3 if ytd_perf > 0 else 0))
 
     trend_score = min(30,
-        (10 if price > ma20 else 0) +
-        (10 if price > ma50 else 0) +
+        (10 if price > ma20  else 0) +
+        (10 if price > ma50  else 0) +
         (10 if price > ma200 else 0)
     )
 
-    momentum_score = min(30, max(0,
-        (15 if ytd_perf > 15 else 10 if ytd_perf > 8 else 5 if ytd_perf > 0 else 0) +
-        (15 if weekly_flow > 1000 else 10 if weekly_flow > 0 else 0)
-    ))
+    # Momentum: YTD perf magnitude + flow size as confirmation
+    ytd_mom = (15 if ytd_perf > 15 else 10 if ytd_perf > 8 else 5 if ytd_perf > 0 else 0)
+    flow_mom = (15 if weekly_flow >= 500 else 10 if weekly_flow >= 100 else 5 if weekly_flow > 0 else 0)
+    momentum_score = min(30, ytd_mom + flow_mom)
 
     total = capital_score + trend_score + momentum_score
 
