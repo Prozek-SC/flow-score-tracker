@@ -12,6 +12,7 @@ from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 from supabase import create_client
 from tradingview_screener import Query, col
+from data_clients import FinvizClient
 
 load_dotenv()
 
@@ -332,6 +333,230 @@ def get_unusual_options(tickers: list) -> list:
 # MAIN RUNNER
 # ============================================================
 
+
+# ============================================================
+# FINVIZ FALLBACK — works 24/7, used when TradingView returns nothing
+# (markets closed, rate limited, or weekend)
+# ============================================================
+
+# Finviz sector filter strings mapping our sector names
+FINVIZ_SECTOR_MAP = {
+    "Technology": "Technology",
+    "Healthcare": "Healthcare",
+    "Financials": "Financial",
+    "Consumer Discretionary": "Consumer Cyclical",
+    "Consumer Staples": "Consumer Defensive",
+    "Industrials": "Industrials",
+    "Energy": "Energy",
+    "Utilities": "Utilities",
+    "Real Estate": "Real Estate",
+    "Materials": "Basic Materials",
+    "Communication Services": "Communication Services",
+}
+
+def get_top_sectors_finviz() -> tuple:
+    """
+    Rank sectors by ETF 200MA strength using Finviz data.
+    Returns (top_3, all_sectors) — same shape as get_top_sectors().
+    """
+    fv = FinvizClient()
+    etf_tickers = list(SECTOR_ETFS.values())
+    data = fv.get_ticker_data(etf_tickers)
+
+    if not data:
+        print("  Finviz sector fallback: no ETF data returned")
+        return [], []
+
+    sectors = []
+    for sector_name, etf in SECTOR_ETFS.items():
+        d = data.get(etf)
+        if not d:
+            continue
+        price = d.get("price", 0)
+        sma200 = d.get("sma200", 0)
+        if sma200 == 0:
+            continue
+        pct_from_200ma = round((price - sma200) / sma200 * 100, 2)
+        sectors.append({
+            "sector": sector_name,
+            "etf": etf,
+            "price": round(price, 2),
+            "ma200": round(sma200, 2),
+            "above_200ma": price > sma200,
+            "pct_from_200ma": pct_from_200ma,
+            "perf_3m": d.get("perf_quarter", 0),
+            "perf_1m": d.get("perf_month", 0),
+        })
+
+    sectors.sort(key=lambda x: (not x["above_200ma"], -x["pct_from_200ma"]))
+    print(f"  Finviz sector fallback: ranked {len(sectors)} sectors")
+    return sectors[:3], sectors
+
+
+def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25) -> list:
+    """
+    50-Day Breakout stocks via Finviz fallback for a given sector.
+    Applies same filters: above SMA50, within 3% of 52W high, optionable.
+    Uses Finviz screener URL to get a batch of candidates, then filters.
+    """
+    finviz_sector = FINVIZ_SECTOR_MAP.get(sector_name)
+    if not finviz_sector:
+        return []
+
+    fv = FinvizClient()
+    if not fv.token:
+        return []
+
+    # Use Finviz screener export with sector + basic filters
+    # Filters: sector, above SMA50, market cap > $1B, optionable
+    import urllib.parse
+    params = {
+        "v": "111",
+        "f": f"sec_{finviz_sector.lower().replace(' ', '')},cap_midlarge,ta_sma50_pa,sh_opt_option",
+        "auth": fv.token,
+        "o": "-perf13w",  # sort by 3M performance desc
+    }
+    url = f"https://elite.finviz.com/export.ashx?{urllib.parse.urlencode(params)}"
+
+    try:
+        import requests as _req, pandas as _pd
+        from io import StringIO as _SIO
+        resp = _req.get(url, timeout=15)
+        if resp.status_code != 200:
+            print(f"  Finviz stock fallback HTTP {resp.status_code}")
+            return []
+        df = _pd.read_csv(_SIO(resp.text))
+        if df.empty:
+            return []
+
+        stocks = []
+        for _, row in df.iterrows():
+            ticker = str(row.get("Ticker", "")).strip()
+            if not ticker:
+                continue
+
+            price = fv._float(row.get("Price", 0))
+            sma50 = fv._float(row.get("SMA50", 0))
+            sma200 = fv._float(row.get("SMA200", 0))
+            high_52w = fv._float(row.get("52W High", 0))
+            perf_3m = fv._pct(row.get("Perf Quart", "0%"))
+            perf_1m = fv._pct(row.get("Perf Month", "0%"))
+            mktcap = fv._float(row.get("Market Cap", 0))
+            short_ratio = fv._float(row.get("Short Ratio", 0))
+            rel_vol = fv._float(row.get("Rel Volume", 1))
+
+            # Apply same post-filters as TradingView scanner
+            if price <= 0 or sma50 <= 0:
+                continue
+            if price < sma50:  # must be above 50MA
+                continue
+            if high_52w > 0:
+                pct_from_high = (high_52w - price) / high_52w * 100
+                if pct_from_high > 3.0:  # must be within 3% of 52W high
+                    continue
+            if short_ratio < 1:
+                continue
+
+            rs_vs_etf = round(perf_3m - etf_perf_3m, 2)
+            stocks.append({
+                "ticker": ticker,
+                "name": str(row.get("Company", ticker))[:40],
+                "price": round(price, 2),
+                "ma200": round(sma200, 2),
+                "ma50": round(sma50, 2),
+                "above_200ma": bool(price > sma200) if sma200 else None,
+                "above_50ma": True,
+                "perf_3m": round(perf_3m, 2),
+                "perf_1m": round(perf_1m, 2),
+                "rs_vs_etf": rs_vs_etf,
+                "rel_vol": round(rel_vol, 2),
+                "mktcap_b": round(mktcap / 1e9, 1) if mktcap > 0 else 0,
+                "scanner": "50day",
+            })
+
+        stocks.sort(key=lambda x: x["rs_vs_etf"], reverse=True)
+        print(f"  Finviz 50-day fallback [{sector_name}]: {len(stocks[:limit])} stocks")
+        return stocks[:limit]
+
+    except Exception as e:
+        print(f"  Finviz stock fallback error [{sector_name}]: {e}")
+        return []
+
+
+def run_big_blue_sky_finviz(limit: int = 50) -> list:
+    """
+    Big Blue Sky via Finviz fallback.
+    Same filters: mid-cap, new 52W high (within 1%), above SMA50, optionable.
+    """
+    fv = FinvizClient()
+    if not fv.token:
+        return []
+
+    import urllib.parse
+    params = {
+        "v": "111",
+        "f": "cap_smallmid,ta_highstock52w_nh,ta_sma50_pa,sh_opt_option,sh_price_u500",
+        "auth": fv.token,
+        "o": "-perf13w",
+    }
+    url = f"https://elite.finviz.com/export.ashx?{urllib.parse.urlencode(params)}"
+
+    try:
+        import requests as _req, pandas as _pd
+        from io import StringIO as _SIO
+        resp = _req.get(url, timeout=15)
+        if resp.status_code != 200:
+            return []
+        df = _pd.read_csv(_SIO(resp.text))
+        if df.empty:
+            return []
+
+        stocks = []
+        for _, row in df.iterrows():
+            ticker = str(row.get("Ticker", "")).strip()
+            if not ticker:
+                continue
+
+            price = fv._float(row.get("Price", 0))
+            sma50 = fv._float(row.get("SMA50", 0))
+            sma200 = fv._float(row.get("SMA200", 0))
+            high_52w = fv._float(row.get("52W High", 0))
+            perf_3m = fv._pct(row.get("Perf Quart", "0%"))
+            mktcap = fv._float(row.get("Market Cap", 0))
+            sector = str(row.get("Sector", ""))
+            rel_vol = fv._float(row.get("Rel Volume", 1))
+
+            if price <= 0 or price > 500:
+                continue
+            if mktcap > 10e9 or mktcap < 300e6:
+                continue
+            if high_52w > 0:
+                pct_from_high = (high_52w - price) / high_52w * 100
+                if pct_from_high > 1.0:  # BBS: within 1% of 52W high
+                    continue
+
+            stocks.append({
+                "ticker": ticker,
+                "name": str(row.get("Company", ticker))[:40],
+                "price": round(price, 2),
+                "ma200": round(sma200, 2),
+                "ma50": round(sma50, 2),
+                "above_200ma": bool(price > sma200) if sma200 else None,
+                "perf_3m": round(perf_3m, 2),
+                "rel_vol": round(rel_vol, 2),
+                "mktcap_b": round(mktcap / 1e9, 1),
+                "sector": sector,
+                "scanner": "bigbluesky",
+            })
+
+        stocks.sort(key=lambda x: x["perf_3m"], reverse=True)
+        print(f"  Finviz BBS fallback: {len(stocks[:limit])} stocks")
+        return stocks[:limit]
+
+    except Exception as e:
+        print(f"  Finviz BBS fallback error: {e}")
+        return []
+
 def run_scanner() -> dict:
     print(f"[{datetime.now()}] Running Market Scanner...")
     sb = get_supabase()
@@ -344,6 +569,17 @@ def run_scanner() -> dict:
         print(f"  Sector fetch error: {e}")
         top_sectors, all_sectors = [], []
 
+    # Fall back to Finviz if TradingView returned nothing (markets closed/weekend)
+    using_finviz = False
+    if not top_sectors:
+        print("  TradingView returned no sectors — trying Finviz fallback...")
+        try:
+            top_sectors, all_sectors = get_top_sectors_finviz()
+            using_finviz = True
+            print(f"  Finviz fallback sectors: {[s['sector'] for s in top_sectors]}")
+        except Exception as e:
+            print(f"  Finviz sector fallback error: {e}")
+
     print(f"  Top sectors: {[s['sector'] for s in top_sectors]}")
 
     sector_stocks = {}
@@ -354,7 +590,7 @@ def run_scanner() -> dict:
         etf_perf = sector_data.get("perf_3m", 0)
         print(f"  Scanning {sector} (ETF 3M: {etf_perf}%)...")
         try:
-            stocks = get_top_stocks_for_sector(sector, etf_perf)
+            stocks = get_top_stocks_finviz(sector, etf_perf) if using_finviz else get_top_stocks_for_sector(sector, etf_perf)
             sector_stocks[sector] = stocks
             all_top_tickers.extend([s["ticker"] for s in stocks[:10]])
             if stocks:
@@ -365,7 +601,7 @@ def run_scanner() -> dict:
 
     # ── BIG BLUE SKY ──
     try:
-        big_blue_sky = run_big_blue_sky_scanner()
+        big_blue_sky = run_big_blue_sky_finviz() if using_finviz else run_big_blue_sky_scanner()
         all_top_tickers.extend([s["ticker"] for s in big_blue_sky[:20]])
         print(f"  Big Blue Sky: {len(big_blue_sky)} stocks found")
     except Exception as e:
@@ -410,6 +646,7 @@ def run_scanner() -> dict:
     output = {
         "run_date": date.today().isoformat(),
         "run_at": datetime.now().isoformat(),
+        "data_source": "finviz" if using_finviz else "tradingview",
         "top_sectors": top_sectors,
         "all_sectors": all_sectors,
         "sector_stocks": sector_stocks,
