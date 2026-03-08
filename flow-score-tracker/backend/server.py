@@ -364,6 +364,23 @@ def trigger_daily():
 
 @app.route("/api/scanner/run", methods=["POST"])
 def trigger_scanner():
+    # On non-trading days, skip live scan and return cached results immediately
+    if not is_trading_day():
+        sb = get_sb()
+        try:
+            result = sb.table("scanner_results").select("*").order("run_date", desc=True).limit(1).execute()
+            if result.data:
+                row = result.data[0]
+                return jsonify({
+                    "success": True,
+                    "cached": True,
+                    "message": f"Markets closed — showing last scan from {row['run_date']}",
+                    "run_date": row["run_date"],
+                })
+        except Exception as e:
+            print(f"Cache fetch error: {e}")
+        return jsonify({"success": False, "message": "Markets closed and no cached results available"})
+
     import threading
     def _run():
         try:
