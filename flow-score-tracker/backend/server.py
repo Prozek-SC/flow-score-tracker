@@ -13,7 +13,9 @@ from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 from supabase import create_client
 
-from pipeline import run_weekly_flow_score, run_daily_price_update, get_ici_fund_flows, score_tickers
+from pipeline import (run_weekly_flow_score, run_daily_price_update,
+                      get_ici_fund_flows, score_tickers,
+                      get_sector_transitions, get_score_changes)
 from scanner import run_scanner
 from email_report import send_weekly_report, send_daily_price_alert, send_scanner_report
 
@@ -22,6 +24,22 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 ET = pytz.timezone("America/New_York")
+
+US_HOLIDAYS = {
+    # Add major market holidays here (expand annually)
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03",
+    "2026-05-25", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+}
+
+def is_trading_day(dt=None) -> bool:
+    """Returns True if dt (default: today ET) is a market trading day."""
+    if dt is None:
+        dt = datetime.now(ET).date()
+    if dt.weekday() >= 5:  # Saturday=5, Sunday=6
+        return False
+    if dt.isoformat() in US_HOLIDAYS:
+        return False
+    return True
 
 
 def get_sb():
@@ -209,6 +227,39 @@ def sector_rankings():
     return jsonify(list(seen.values()))
 
 
+@app.route("/api/sectors/history")
+def sector_history():
+    """
+    Returns weekly sector snapshots for the last N weeks.
+    Used for WoW rotation tracking in the dashboard.
+    """
+    sb = get_sb()
+    weeks = int(request.args.get("weeks", 6))
+    cutoff = (date.today() - timedelta(weeks=weeks)).isoformat()
+
+    result = sb.table("sector_snapshots") \
+        .select("*") \
+        .gte("week_ending", cutoff) \
+        .order("week_ending", desc=True) \
+        .execute()
+
+    # Group by sector for easy frontend consumption
+    by_sector = {}
+    for row in (result.data or []):
+        s = row["sector"]
+        if s not in by_sector:
+            by_sector[s] = []
+        by_sector[s].append({
+            "week_ending": row["week_ending"],
+            "flow_score": row["flow_score"],
+            "status": row["status"],
+            "rank": row["rank"],
+            "etf_flow_m": row.get("etf_flow_m", 0),
+        })
+
+    return jsonify({"sectors": by_sector, "weeks": weeks})
+
+
 # ============================================================
 # CAPITAL FLOW LEADERS & EXITS
 # ============================================================
@@ -372,7 +423,14 @@ def get_scanner_results():
         if result.data:
             row = result.data[0]
             data = json.loads(row["results"]) if isinstance(row["results"], str) else row["results"]
-            return jsonify({"success": True, "data": data, "run_date": row["run_date"]})
+            trading_day = is_trading_day()
+            return jsonify({
+                "success": True,
+                "data": data,
+                "run_date": row["run_date"],
+                "is_cached": not trading_day,
+                "cache_notice": None if trading_day else f"Markets closed — showing last scan from {row['run_date']}",
+            })
         return jsonify({"success": False, "message": "No scanner results yet"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
