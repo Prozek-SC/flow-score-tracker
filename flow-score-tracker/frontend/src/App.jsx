@@ -434,8 +434,18 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
           <div style={{ fontSize: 20, fontWeight: 900, color: "#fff", marginBottom: 4 }}>{scanLabel}</div>
           <div style={{ fontSize: 13, color: "#888" }}>{scanDesc}</div>
           {lastRun && (
-            <div style={{ fontSize: 12, color: "#555", marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: "#555", marginTop: 4, display: "flex", alignItems: "center", gap: 8 }}>
               Last run: {new Date(lastRun).toLocaleString()}
+              {data?.data_source === "finviz" && (
+                <span style={{ fontSize: 10, background: "#1a1a2e", color: "#7b9fff", border: "1px solid #7b9fff44", borderRadius: 4, padding: "2px 6px", letterSpacing: 1 }}>
+                  FINVIZ
+                </span>
+              )}
+              {data?.data_source === "tradingview" && (
+                <span style={{ fontSize: 10, background: "#1a1a2e", color: "#00d4aa", border: "1px solid #00d4aa44", borderRadius: 4, padding: "2px 6px", letterSpacing: 1 }}>
+                  LIVE
+                </span>
+              )}
             </div>
           )}
           {cacheNotice && (
