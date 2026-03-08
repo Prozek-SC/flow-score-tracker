@@ -247,7 +247,119 @@ def send_scanner_report(results: dict):
 # ============================================================
 
 def generate_weekly_html(results: list) -> str:
-    sorted_results = sorted(results, key=lambda x: x.get("flow_score", 0), reverse=True)
+    # Extract meta block if present
+    meta = {}
+    clean_results = []
+    for r in results:
+        if r.get("_is_meta"):
+            meta = r
+        else:
+            clean_results.append(r)
+
+    score_changes = meta.get("score_changes", {"surges": [], "fades": []})
+    sector_transitions = meta.get("sector_transitions", [])
+
+    sorted_results = sorted(clean_results, key=lambda x: x.get("flow_score", 0), reverse=True)
+
+    body = ""
+
+    # --- Sector Transition Alerts ---
+    if sector_transitions:
+        trans_rows = ""
+        for t in sector_transitions:
+            if t["type"] == "breakout":
+                color = "#00d4aa"
+                icon = "🚀"
+                desc = f"Crossed into LEADING ({t['prev_score']:.0f} → {t['curr_score']:.0f})"
+            elif t["type"] == "breakdown":
+                color = "#ff4444"
+                icon = "⚠️"
+                desc = f"Dropped from LEADING ({t['prev_score']:.0f} → {t['curr_score']:.0f})"
+            elif t["type"] == "surge":
+                color = "#ffd700"
+                icon = "📈"
+                desc = f"Score surged {t['delta']:+.0f} pts ({t['prev_score']:.0f} → {t['curr_score']:.0f})"
+            else:
+                color = "#ff9944"
+                icon = "📉"
+                desc = f"Score faded {t['delta']:+.0f} pts ({t['prev_score']:.0f} → {t['curr_score']:.0f})"
+
+            trans_rows += f"""
+            <tr style="border-bottom:1px solid #1a1a2e;">
+              <td style="padding:12px 16px;font-size:18px;">{icon}</td>
+              <td style="padding:12px 16px;">
+                <span style="color:{color};font-weight:900;font-family:monospace;font-size:14px;">{t['sector']}</span>
+                <span style="color:#666;font-size:11px;margin-left:8px;">{t['etf']}</span>
+              </td>
+              <td style="padding:12px 16px;color:#aaa;font-size:12px;">{desc}</td>
+              <td style="padding:12px 16px;text-align:right;">
+                <span style="color:{color};font-weight:700;font-family:monospace;">{t['label']}</span>
+              </td>
+            </tr>"""
+
+        body += f"""
+        <div style="background:#0a0a18;border:2px solid #ffd700;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+          <div style="background:#111128;padding:12px 16px;border-bottom:1px solid #1a1a2e;">
+            <span style="color:#ffd700;font-size:11px;letter-spacing:2px;text-transform:uppercase;">
+              ⚡ Sector Rotation Signals
+            </span>
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <tbody>{trans_rows}</tbody>
+          </table>
+        </div>"""
+
+    # --- Score Change Alerts ---
+    surges = score_changes.get("surges", [])
+    fades = score_changes.get("fades", [])
+
+    if surges or fades:
+        change_rows = ""
+        for item in surges:
+            change_rows += f"""
+            <tr style="border-bottom:1px solid #1a1a2e;">
+              <td style="padding:10px 16px;font-size:16px;">📈</td>
+              <td style="padding:10px 16px;">
+                <span style="color:#00d4aa;font-weight:900;font-family:monospace;">{item['ticker']}</span>
+                <span style="color:#555;font-size:10px;margin-left:6px;">{item['sector']}</span>
+              </td>
+              <td style="padding:10px 16px;color:#aaa;font-size:12px;font-family:monospace;">
+                {item['prev_score']:.0f} → {item['curr_score']:.0f}
+              </td>
+              <td style="padding:10px 16px;text-align:right;">
+                <span style="color:#00d4aa;font-weight:700;font-family:monospace;">+{item['delta']:.0f} pts</span>
+              </td>
+            </tr>"""
+
+        for item in fades:
+            change_rows += f"""
+            <tr style="border-bottom:1px solid #1a1a2e;">
+              <td style="padding:10px 16px;font-size:16px;">📉</td>
+              <td style="padding:10px 16px;">
+                <span style="color:#ff4444;font-weight:900;font-family:monospace;">{item['ticker']}</span>
+                <span style="color:#555;font-size:10px;margin-left:6px;">{item['sector']}</span>
+              </td>
+              <td style="padding:10px 16px;color:#aaa;font-size:12px;font-family:monospace;">
+                {item['prev_score']:.0f} → {item['curr_score']:.0f}
+              </td>
+              <td style="padding:10px 16px;text-align:right;">
+                <span style="color:#ff4444;font-weight:700;font-family:monospace;">{item['delta']:.0f} pts</span>
+              </td>
+            </tr>"""
+
+        body += f"""
+        <div style="background:#0a0a18;border:1px solid #1a1a2e;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+          <div style="background:#111128;padding:12px 16px;border-bottom:1px solid #1a1a2e;">
+            <span style="color:#00d4aa;font-size:11px;letter-spacing:2px;text-transform:uppercase;">
+              ⚡ Score Changes (±15+ pts WoW)
+            </span>
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <tbody>{change_rows}</tbody>
+          </table>
+        </div>"""
+
+    # --- Full Score Table ---
     rows = ""
     for r in sorted_results:
         ticker = r.get("ticker", "")
@@ -266,13 +378,15 @@ def generate_weekly_html(results: list) -> str:
         for key, display in [("capital_flow", "Capital Flow"), ("trend", "Trend"), ("momentum", "Momentum")]:
             p = pillars.get(key, {})
             ps = p.get("score", 0)
-            bar_color = _score_color(ps)
+            max_pts = 40 if key == "capital_flow" else 30
+            bar_pct = (ps / max_pts) * 100
+            bar_color = _score_color(ps / max_pts * 100)
             pillar_html += f"""
             <tr>
               <td style="padding:3px 8px;color:#aaa;font-size:11px;width:100px;">{display}</td>
               <td style="padding:3px 8px;">
                 <div style="background:#1a1a2e;border-radius:3px;height:6px;width:200px;">
-                  <div style="background:{bar_color};width:{ps}%;height:6px;border-radius:3px;"></div>
+                  <div style="background:{bar_color};width:{bar_pct:.0f}%;height:6px;border-radius:3px;"></div>
                 </div>
               </td>
               <td style="padding:3px 8px;color:{bar_color};font-size:11px;font-weight:700;font-family:monospace;">{ps}</td>
@@ -297,7 +411,7 @@ def generate_weekly_html(results: list) -> str:
           </td>
         </tr>"""
 
-    body = f"""
+    body += f"""
     <div style="background:#0a0a18;border:1px solid #1a1a2e;border-radius:8px;overflow:hidden;">
       <div style="background:#111128;padding:12px 16px;border-bottom:1px solid #1a1a2e;">
         <span style="color:#00d4aa;font-size:11px;letter-spacing:2px;text-transform:uppercase;">
@@ -324,7 +438,7 @@ def send_weekly_report(results: list):
         print("  No results — skipping weekly email")
         return
     today = date.today().strftime("%B %d, %Y")
-    html = generate_weekly_html(results)
+    html = generate_weekly_html(results)  # handles meta block internally
     _send_email(f"📈 Weekly Flow Scores — {today}", html)
 
 
