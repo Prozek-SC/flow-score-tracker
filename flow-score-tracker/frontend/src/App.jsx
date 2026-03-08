@@ -351,6 +351,7 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
   const [scanStatus, setScanStatus] = useState(null);
   const [selectedSector, setSelectedSector] = useState(null);
   const [lastRun, setLastRun] = useState(null);
+  const [cacheNotice, setCacheNotice] = useState(null);
 
   const isBreakout = scannerType === "breakout";
 
@@ -371,7 +372,8 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
       const json = await res.json();
       if (json.success && json.data) {
         setData(json.data);
-        setLastRun(json.data.run_at);
+        setLastRun(json.run_date || json.data.run_at);
+        setCacheNotice(json.cache_notice || null);
         if (isBreakout && json.data.top_sectors?.length > 0) {
           setSelectedSector(prev => prev || json.data.top_sectors[0].sector);
         }
@@ -388,7 +390,14 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
     setRunning(true);
     setScanStatus("Scanning markets...");
     try {
-      await fetch(`${API_BASE}/api/scanner/run`, { method: "POST" });
+      const runRes = await fetch(`${API_BASE}/api/scanner/run`, { method: "POST" });
+      const runJson = await runRes.json();
+      if (runJson.cached) {
+        await fetchResults();
+        setRunning(false);
+        setScanStatus(null);
+        return;
+      }
       let attempts = 0;
       const poll = setInterval(async () => {
         attempts++;
@@ -429,7 +438,12 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
               Last run: {new Date(lastRun).toLocaleString()}
             </div>
           )}
-          {scanStatus && (
+          {cacheNotice && (
+            <div style={{ fontSize: 12, color: "#ffd700", marginTop: 6, background: "#1a1500", border: "1px solid #ffd70044", borderRadius: 6, padding: "6px 10px", display: "inline-block" }}>
+              📅 {cacheNotice}
+            </div>
+          )}
+          {scanStatus && !cacheNotice && (
             <div style={{ fontSize: 13, color: accentColor, marginTop: 6, letterSpacing: 0 }}>
               ⏳ {scanStatus}
             </div>
