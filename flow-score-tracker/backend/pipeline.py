@@ -320,7 +320,23 @@ def run_weekly_flow_score():
     # Capital Flow Leaders & Exits
     save_flow_leaders_exits(sb, results)
 
+    # Weekly sector snapshot (for WoW rotation tracking)
+    save_sector_snapshot(sb, sector_scores)
+
+    # Score change + sector transition detection (for email alerts)
+    score_changes = get_score_changes(sb, results)
+    sector_transitions = get_sector_transitions(sb, sector_scores)
+
     print(f"[{datetime.now()}] Weekly Flow Score complete. {len(results)} tickers.")
+    print(f"  Surges: {len(score_changes['surges'])} | Fades: {len(score_changes['fades'])}")
+    print(f"  Sector transitions: {len(sector_transitions)}")
+
+    # Attach meta for email report
+    results.append({
+        "_is_meta": True,
+        "score_changes": score_changes,
+        "sector_transitions": sector_transitions,
+    })
     return results
 
 
@@ -429,6 +445,174 @@ def save_sector_scores(sb, sector_scores: list):
             "rank": s["rank"],
         }
         sb.table("sector_scores").upsert(row, on_conflict="date,sector").execute()
+
+
+def save_sector_snapshot(sb, sector_scores: list):
+    """
+    Save weekly sector snapshot every Friday (or on manual weekly run).
+    Preserves one row per sector per week for WoW rotation tracking.
+    """
+    # Use Friday's date as the week_ending anchor
+    today = date.today()
+    days_since_friday = (today.weekday() - 4) % 7
+    week_ending = (today - timedelta(days=days_since_friday)).isoformat()
+
+    for s in sector_scores:
+        row = {
+            "week_ending": week_ending,
+            "sector": s["sector"],
+            "etf": s.get("etf", ""),
+            "flow_score": s["flow_score"],
+            "capital_flow": s["capital_flow"],
+            "trend": s["trend"],
+            "momentum": s["momentum"],
+            "etf_flow_m": s.get("etf_flow_m", 0),
+            "ytd_perf": s.get("ytd_perf", 0),
+            "status": s["status"],
+            "rank": s.get("rank", 0),
+        }
+        sb.table("sector_snapshots").upsert(row, on_conflict="week_ending,sector").execute()
+
+    print(f"  Sector snapshots saved for week ending {week_ending}")
+
+
+def get_sector_transitions(sb, current_scores: list) -> list:
+    """
+    Compare current sector scores against last week's snapshot.
+    Returns list of notable transitions:
+      - NEUTRAL → LEADING (score crossed 70)
+      - LEADING → NEUTRAL (score dropped below 70)
+      - Large score jumps (±10 pts)
+    """
+    try:
+        # Get most recent prior snapshot (before this week)
+        today = date.today()
+        days_since_friday = (today.weekday() - 4) % 7
+        this_week = (today - timedelta(days=days_since_friday)).isoformat()
+
+        result = sb.table("sector_snapshots") \
+            .select("*") \
+            .lt("week_ending", this_week) \
+            .order("week_ending", desc=True) \
+            .limit(11) \
+            .execute()
+
+        prior = {r["sector"]: r for r in (result.data or [])}
+        if not prior:
+            return []
+
+        transitions = []
+        for s in current_scores:
+            sector = s["sector"]
+            curr_score = s["flow_score"]
+            curr_status = s["status"]
+            prev = prior.get(sector)
+            if not prev:
+                continue
+
+            prev_score = prev["flow_score"]
+            prev_status = prev["status"]
+            delta = curr_score - prev_score
+
+            transition = None
+
+            # Status transitions
+            if prev_status != "LEADING" and curr_status == "LEADING":
+                transition = {
+                    "sector": sector, "etf": s.get("etf", ""),
+                    "type": "breakout",
+                    "label": "→ LEADING",
+                    "delta": delta,
+                    "curr_score": curr_score,
+                    "prev_score": prev_score,
+                    "priority": 1,
+                }
+            elif prev_status == "LEADING" and curr_status != "LEADING":
+                transition = {
+                    "sector": sector, "etf": s.get("etf", ""),
+                    "type": "breakdown",
+                    "label": "LEADING →",
+                    "delta": delta,
+                    "curr_score": curr_score,
+                    "prev_score": prev_score,
+                    "priority": 2,
+                }
+            elif abs(delta) >= 10:
+                transition = {
+                    "sector": sector, "etf": s.get("etf", ""),
+                    "type": "surge" if delta > 0 else "fade",
+                    "label": f"{'+' if delta > 0 else ''}{delta:.0f} pts",
+                    "delta": delta,
+                    "curr_score": curr_score,
+                    "prev_score": prev_score,
+                    "priority": 3,
+                }
+
+            if transition:
+                transitions.append(transition)
+
+        transitions.sort(key=lambda x: x["priority"])
+        return transitions
+
+    except Exception as e:
+        print(f"  Sector transition check error: {e}")
+        return []
+
+
+def get_score_changes(sb, current_results: list) -> dict:
+    """
+    Compare current weekly scores against prior week.
+    Returns: { "surges": [...], "fades": [...] }
+    Each item has ticker, curr_score, prev_score, delta, rating.
+    """
+    surges, fades = [], []
+    try:
+        tickers = [r["ticker"] for r in current_results]
+        cutoff = (date.today() - timedelta(days=14)).isoformat()
+
+        result = sb.table("weekly_scores") \
+            .select("ticker,flow_score,date") \
+            .in_("ticker", tickers) \
+            .gte("date", cutoff) \
+            .order("date", desc=True) \
+            .execute()
+
+        # Group by ticker, take two most recent
+        from collections import defaultdict
+        by_ticker = defaultdict(list)
+        for row in (result.data or []):
+            by_ticker[row["ticker"]].append(row)
+
+        curr_map = {r["ticker"]: r for r in current_results}
+
+        for ticker, rows in by_ticker.items():
+            if len(rows) < 2:
+                continue
+            curr_score = curr_map.get(ticker, {}).get("flow_score", rows[0]["flow_score"])
+            prev_score = rows[1]["flow_score"]  # second most recent
+            delta = curr_score - prev_score
+
+            item = {
+                "ticker": ticker,
+                "curr_score": curr_score,
+                "prev_score": prev_score,
+                "delta": delta,
+                "rating": curr_map.get(ticker, {}).get("rating", ""),
+                "sector": curr_map.get(ticker, {}).get("sector", ""),
+            }
+
+            if delta >= 15:
+                surges.append(item)
+            elif delta <= -15:
+                fades.append(item)
+
+        surges.sort(key=lambda x: x["delta"], reverse=True)
+        fades.sort(key=lambda x: x["delta"])
+
+    except Exception as e:
+        print(f"  Score change check error: {e}")
+
+    return {"surges": surges, "fades": fades}
 
 
 def save_flow_leaders_exits(sb, results: list):
