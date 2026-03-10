@@ -147,7 +147,7 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
                 'Perf.3M', 'Perf.1M', 'Perf.W',
                 'relative_volume_10d_calc', 'market_cap_basic', 'sector',
                 'High.All', 'short_ratio',
-                'option_volume', '52WeekHigh'
+                '52WeekHigh'
             )
             .set_markets('america')
             .where(
@@ -156,7 +156,7 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
                 col('exchange').isin(['NASDAQ', 'NYSE']),
                 col('is_primary') == True,
                 col('close') > col('SMA50'),             # above 50MA (nos50)
-                col('option_volume') > 1000,             # options volume > 1000 (o1000)
+                
                 col('short_ratio') > 1,                  # short interest ratio > 1 (optionshort o1)
             )
             .order_by('Perf.3M', ascending=False)
@@ -225,7 +225,7 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
                 'name', 'description', 'close', 'SMA200', 'SMA50',
                 'Perf.3M', 'Perf.1M', 'Perf.W',
                 'relative_volume_10d_calc', 'market_cap_basic', 'sector',
-                'short_ratio', 'option_volume', '52WeekHigh'
+                'short_ratio', '52WeekHigh'
             )
             .set_markets('america')
             .where(
@@ -235,7 +235,7 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
                 col('exchange').isin(['NASDAQ', 'NYSE']),
                 col('is_primary') == True,
                 col('close') > col('SMA50'),             # above 50MA
-                col('option_volume') > 1,                # optionable
+                
                 col('short_ratio') > 1,                  # short interest > 1
             )
             .order_by('Perf.3M', ascending=False)
@@ -410,11 +410,28 @@ def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25)
     # Use Finviz screener export with sector + basic filters
     # Filters: sector, above SMA50, market cap > $1B, optionable
     import urllib.parse
+    # Finviz sector filter codes
+    sector_filter_map = {
+        "Technology": "sec_technology",
+        "Healthcare": "sec_healthcare",
+        "Financials": "sec_financial",
+        "Consumer Discretionary": "sec_consumercyclical",
+        "Consumer Staples": "sec_consumerdefensive",
+        "Industrials": "sec_industrials",
+        "Energy": "sec_energy",
+        "Utilities": "sec_utilities",
+        "Real Estate": "sec_realestate",
+        "Materials": "sec_basicmaterials",
+        "Communication Services": "sec_communicationservices",
+    }
+    sec_filter = sector_filter_map.get(sector_name, "")
+    if not sec_filter:
+        return []
     params = {
         "v": "111",
-        "f": f"sec_{finviz_sector.lower().replace(' ', '')},cap_midlarge,ta_sma50_pa,sh_opt_option",
+        "f": f"{sec_filter},cap_midlarge,ta_sma50_pa,sh_opt_option,sh_short_o1",
         "auth": fv.token,
-        "o": "-perf13w",  # sort by 3M performance desc
+        "o": "-perf13w",
     }
     url = f"https://elite.finviz.com/export.ashx?{urllib.parse.urlencode(params)}"
 
@@ -422,12 +439,16 @@ def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25)
         import requests as _req, pandas as _pd
         from io import StringIO as _SIO
         resp = _req.get(url, timeout=15)
+        print(f"  Finviz 50-day [{sector_name}]: HTTP {resp.status_code}, {len(resp.text)} chars")
         if resp.status_code != 200:
-            print(f"  Finviz stock fallback HTTP {resp.status_code}")
+            print(f"  Finviz response: {resp.text[:200]}")
             return []
         df = _pd.read_csv(_SIO(resp.text))
         if df.empty:
+            print(f"  Finviz 50-day [{sector_name}]: CSV returned empty dataframe")
             return []
+
+        print(f"  Finviz 50-day [{sector_name}]: {len(df)} rows, columns: {list(df.columns)}")
 
         stocks = []
         for _, row in df.iterrows():
@@ -493,9 +514,10 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
         return []
 
     import urllib.parse
+    import urllib.parse
     params = {
         "v": "111",
-        "f": "cap_smallmid,ta_highstock52w_nh,ta_sma50_pa,sh_opt_option,sh_price_u500",
+        "f": "cap_smallmid,ta_highstock52w_nh,ta_sma50_pa,sh_opt_option,sh_price_u500,sh_short_o1",
         "auth": fv.token,
         "o": "-perf13w",
     }
