@@ -67,6 +67,19 @@ def safe_float(val, default=0.0):
         return default
 
 
+def clean_nans(obj):
+    """Recursively replace NaN/inf in dicts and lists with None for JSON safety."""
+    import math as _math
+    if isinstance(obj, dict):
+        return {k: clean_nans(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [clean_nans(v) for v in obj]
+    if isinstance(obj, float):
+        if _math.isnan(obj) or _math.isinf(obj):
+            return None
+    return obj
+
+
 def get_supabase():
     return create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
 
@@ -676,7 +689,7 @@ def run_scanner() -> dict:
         stock["flow_score"] = s.get("flow_score")
         stock["rating"] = s.get("rating")
 
-    output = {
+    output = clean_nans({
         "run_date": date.today().isoformat(),
         "run_at": datetime.now().isoformat(),
         "data_source": "finviz" if using_finviz else "tradingview",
@@ -685,7 +698,7 @@ def run_scanner() -> dict:
         "sector_stocks": sector_stocks,
         "big_blue_sky": big_blue_sky,
         "unusual_activity": unusual,
-    }
+    })
 
     try:
         sb.table("scanner_results").upsert({
