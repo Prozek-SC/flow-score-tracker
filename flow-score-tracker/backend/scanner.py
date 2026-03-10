@@ -170,7 +170,7 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
                 col('is_primary') == True,
                 col('close') > col('SMA50'),             # above 50MA (nos50)
                 
-                col('short_ratio') > 1,                  # short interest ratio > 1 (optionshort o1)
+                
             )
             .order_by('Perf.3M', ascending=False)
             .limit(200)
@@ -442,7 +442,7 @@ def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25)
         return []
     params = {
         "v": "111",
-        "f": f"{sec_filter},cap_midlarge,ta_sma50_pa,sh_opt_option,sh_short_o1",
+        "f": f"{sec_filter},cap_midlarge,ta_sma50_pa,sh_opt_option",
         "auth": fv.token,
         "o": "-perf13w",
     }
@@ -458,43 +458,44 @@ def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25)
             return []
         df = _pd.read_csv(_SIO(resp.text))
         if df.empty:
-            print(f"  Finviz 50-day [{sector_name}]: CSV returned empty dataframe")
+            print(f"  Finviz 50-day [{sector_name}]: empty")
             return []
 
-        print(f"  Finviz 50-day [{sector_name}]: {len(df)} rows, columns: {list(df.columns)}")
+        # Extract candidate tickers from screener results
+        candidate_tickers = [str(row.get("Ticker","")).strip() for _, row in df.iterrows() if str(row.get("Ticker","")).strip()]
+        candidate_tickers = candidate_tickers[:100]  # cap to avoid huge requests
+        print(f"  Finviz 50-day [{sector_name}]: {len(candidate_tickers)} candidates, fetching full data...")
+
+        # Step 2: get full technical data for all candidates
+        full_data = fv.get_ticker_data(candidate_tickers)
+        if not full_data:
+            return []
 
         stocks = []
-        for _, row in df.iterrows():
-            ticker = str(row.get("Ticker", "")).strip()
-            if not ticker:
-                continue
+        for ticker, d in full_data.items():
+            price = d.get("price", 0)
+            sma50 = d.get("sma50", 0)
+            sma200 = d.get("sma200", 0)
+            high_52w = d.get("52w_high", 0)
+            perf_3m = d.get("perf_quarter", 0)
+            perf_1m = d.get("perf_month", 0)
+            mktcap = d.get("market_cap", 0)
+            rel_vol = d.get("relative_volume", 1)
+            name = ticker  # name not in get_ticker_data, use ticker
 
-            price = fv._float(row.get("Price", 0))
-            sma50 = fv._float(row.get("SMA50", 0))
-            sma200 = fv._float(row.get("SMA200", 0))
-            high_52w = fv._float(row.get("52W High", 0))
-            perf_3m = fv._pct(row.get("Perf Quart", "0%"))
-            perf_1m = fv._pct(row.get("Perf Month", "0%"))
-            mktcap = fv._float(row.get("Market Cap", 0))
-            short_ratio = fv._float(row.get("Short Ratio", 0))
-            rel_vol = fv._float(row.get("Rel Volume", 1))
-
-            # Apply same post-filters as TradingView scanner
             if price <= 0 or sma50 <= 0:
                 continue
-            if price < sma50:  # must be above 50MA
+            if price < sma50:
                 continue
             if high_52w > 0:
                 pct_from_high = (high_52w - price) / high_52w * 100
-                if pct_from_high > 3.0:  # must be within 3% of 52W high
+                if pct_from_high > 3.0:
                     continue
-            if short_ratio < 1:
-                continue
 
             rs_vs_etf = round(perf_3m - etf_perf_3m, 2)
             stocks.append({
                 "ticker": ticker,
-                "name": str(row.get("Company", ticker))[:40],
+                "name": name,
                 "price": round(price, 2),
                 "ma200": round(sma200, 2),
                 "ma50": round(sma50, 2),
@@ -529,10 +530,11 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
     import urllib.parse
     import urllib.parse
     params = {
-        "v": "111",
-        "f": "cap_smallmid,ta_highstock52w_nh,ta_sma50_pa,sh_opt_option,sh_price_u500,sh_short_o1",
+        "v": "152",
+        "f": "cap_smallmid,ta_highstock52w_nh,ta_sma50_pa,sh_opt_option,sh_price_u500",
         "auth": fv.token,
         "o": "-perf13w",
+        "c": "0,1,2,3,4,5,6,25,26,27,28,29,30,31,65,66",
     }
     url = f"https://elite.finviz.com/export.ashx?{urllib.parse.urlencode(params)}"
 
@@ -546,20 +548,26 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
         if df.empty:
             return []
 
-        stocks = []
-        for _, row in df.iterrows():
-            ticker = str(row.get("Ticker", "")).strip()
-            if not ticker:
-                continue
+        # Step 1: get candidate tickers from screener
+        candidate_tickers = [str(row.get("Ticker","")).strip() for _, row in df.iterrows() if str(row.get("Ticker","")).strip()]
+        candidate_tickers = candidate_tickers[:100]
+        print(f"  Finviz BBS: {len(candidate_tickers)} candidates, fetching full data...")
 
-            price = fv._float(row.get("Price", 0))
-            sma50 = fv._float(row.get("SMA50", 0))
-            sma200 = fv._float(row.get("SMA200", 0))
-            high_52w = fv._float(row.get("52W High", 0))
-            perf_3m = fv._pct(row.get("Perf Quart", "0%"))
-            mktcap = fv._float(row.get("Market Cap", 0))
-            sector = str(row.get("Sector", ""))
-            rel_vol = fv._float(row.get("Rel Volume", 1))
+        # Step 2: get full technical data
+        full_data = fv.get_ticker_data(candidate_tickers)
+        if not full_data:
+            return []
+
+        stocks = []
+        for ticker, d in full_data.items():
+            price = d.get("price", 0)
+            sma50 = d.get("sma50", 0)
+            sma200 = d.get("sma200", 0)
+            high_52w = d.get("52w_high", 0)
+            perf_3m = d.get("perf_quarter", 0)
+            mktcap = d.get("market_cap", 0)
+            rel_vol = d.get("relative_volume", 1)
+            sector = d.get("sector", "")
 
             if price <= 0 or price > 500:
                 continue
@@ -567,12 +575,12 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
                 continue
             if high_52w > 0:
                 pct_from_high = (high_52w - price) / high_52w * 100
-                if pct_from_high > 1.0:  # BBS: within 1% of 52W high
+                if pct_from_high > 1.0:
                     continue
 
             stocks.append({
                 "ticker": ticker,
-                "name": str(row.get("Company", ticker))[:40],
+                "name": ticker,
                 "price": round(price, 2),
                 "ma200": round(sma200, 2),
                 "ma50": round(sma50, 2),
