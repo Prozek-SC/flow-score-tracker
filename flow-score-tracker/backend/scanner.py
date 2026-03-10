@@ -590,7 +590,13 @@ def run_scanner() -> dict:
         etf_perf = sector_data.get("perf_3m", 0)
         print(f"  Scanning {sector} (ETF 3M: {etf_perf}%)...")
         try:
-            stocks = get_top_stocks_finviz(sector, etf_perf) if using_finviz else get_top_stocks_for_sector(sector, etf_perf)
+            stocks = get_top_stocks_for_sector(sector, etf_perf) if not using_finviz else []
+            # If TradingView returned no stocks, fall back to Finviz
+            if not stocks:
+                print(f"    TV returned 0 stocks for {sector} — trying Finviz fallback...")
+                stocks = get_top_stocks_finviz(sector, etf_perf)
+                if stocks:
+                    using_finviz = True
             sector_stocks[sector] = stocks
             all_top_tickers.extend([s["ticker"] for s in stocks[:10]])
             if stocks:
@@ -601,7 +607,12 @@ def run_scanner() -> dict:
 
     # ── BIG BLUE SKY ──
     try:
-        big_blue_sky = run_big_blue_sky_finviz() if using_finviz else run_big_blue_sky_scanner()
+        big_blue_sky = run_big_blue_sky_scanner()
+        if not big_blue_sky:
+            print("  BBS TV returned 0 — trying Finviz fallback...")
+            big_blue_sky = run_big_blue_sky_finviz()
+            if big_blue_sky:
+                using_finviz = True
         all_top_tickers.extend([s["ticker"] for s in big_blue_sky[:20]])
         print(f"  Big Blue Sky: {len(big_blue_sky)} stocks found")
     except Exception as e:
