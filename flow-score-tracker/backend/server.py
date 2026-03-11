@@ -166,17 +166,23 @@ def latest_scores():
     result = sb.table("weekly_scores") \
         .select("*") \
         .gte("date", cutoff) \
-        .order("flow_score", desc=True) \
+        .order("date", desc=True) \
         .execute()
 
-    scores = []
+    # Deduplicate — keep latest row per ticker
+    seen = {}
     for row in (result.data or []):
-        try:
-            row["pillars"] = json.loads(row.get("pillars", "{}"))
-            row["burst"] = json.loads(row.get("burst", "{}"))
-        except:
-            pass
-        scores.append(row)
+        ticker = row.get("ticker")
+        if ticker not in seen:
+            try:
+                row["pillars"] = json.loads(row.get("pillars", "{}"))
+                row["burst"] = json.loads(row.get("burst", "{}"))
+            except:
+                pass
+            seen[ticker] = row
+
+    # Sort by flow_score descending
+    scores = sorted(seen.values(), key=lambda x: x.get("flow_score", 0) or 0, reverse=True)
     return jsonify(scores)
 
 @app.route("/api/scores/history/<ticker>")
