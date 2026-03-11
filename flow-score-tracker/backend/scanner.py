@@ -16,7 +16,6 @@ from supabase import create_client
 from pipeline import (run_weekly_flow_score, run_daily_price_update,
                       get_ici_fund_flows, score_tickers,
                       get_sector_transitions, get_score_changes)
-from scanner import run_scanner
 from email_report import send_weekly_report, send_daily_price_alert, send_scanner_report
 
 load_dotenv()
