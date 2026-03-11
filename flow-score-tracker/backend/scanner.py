@@ -191,10 +191,10 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
         mktcap = safe_float(row.get('market_cap_basic'))
         high_52w = safe_float(row.get('52WeekHigh'))
 
-        # b0to3h: price within 0-3% below 52w high
+        # price within 15% below 52w high
         if high_52w > 0:
             pct_from_high = (high_52w - price) / high_52w * 100
-            if pct_from_high > 3.0:
+            if pct_from_high > 15.0:
                 continue  # skip — too far from 52w high
 
         stocks.append({
@@ -270,11 +270,11 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
         mktcap = safe_float(row.get('market_cap_basic'))
         high_52w = safe_float(row.get('52WeekHigh'))
 
-        # nh: new 52-week high — price within 1% of 52w high
+        # nh: near 52-week high — price within 5% of 52w high
         if high_52w > 0:
             pct_from_high = (high_52w - price) / high_52w * 100
-            if pct_from_high > 1.0:
-                continue  # not at new high
+            if pct_from_high > 5.0:
+                continue  # not near high
 
         stocks.append({
             "ticker": str(row['name']),
