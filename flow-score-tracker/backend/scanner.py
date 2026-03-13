@@ -160,17 +160,15 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
                 'Perf.3M', 'Perf.1M', 'Perf.W',
                 'relative_volume_10d_calc', 'market_cap_basic', 'sector',
                 'High.All', 'short_ratio',
-                '52WeekHigh'
+                '52WeekHigh', 'High.1M'
             )
             .set_markets('america')
             .where(
                 col('sector').isin(tv_sectors),
-                col('market_cap_basic') > 1e9,          # $1B+ (o1000 = optionable large enough)
+                col('market_cap_basic') > 1e9,
                 col('exchange').isin(['NASDAQ', 'NYSE']),
                 col('is_primary') == True,
-                col('close') > col('SMA50'),             # above 50MA (nos50)
-                
-                
+                col('relative_volume_10d_calc') > 1,    # rel vol > 1
             )
             .order_by('Perf.3M', ascending=False)
             .limit(200)
@@ -189,13 +187,13 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
         perf_1m = safe_float(row.get('Perf.1M'))
         rel_vol = safe_float(row.get('relative_volume_10d_calc'))
         mktcap = safe_float(row.get('market_cap_basic'))
-        high_52w = safe_float(row.get('52WeekHigh'))
+        high_1m = safe_float(row.get('High.1M'))   # 1-month high ≈ 50-day high
 
-        # price within 15% below 52w high
-        if high_52w > 0:
-            pct_from_high = (high_52w - price) / high_52w * 100
-            if pct_from_high > 15.0:
-                continue  # skip — too far from 52w high
+        # price within 3% of 1-month high (replicates Finviz "0-3% below 50-day high")
+        if high_1m > 0:
+            pct_from_high = (high_1m - price) / high_1m * 100
+            if pct_from_high > 3.0:
+                continue
 
         stocks.append({
             "ticker": str(row['name']),
@@ -247,7 +245,6 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
                 col('close') < 500,                      # under $500
                 col('exchange').isin(['NASDAQ', 'NYSE']),
                 col('is_primary') == True,
-                col('close') > col('SMA50'),             # above 50MA
                 
                 col('short_ratio') > 1,                  # short interest > 1
             )
@@ -442,7 +439,7 @@ def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25)
         return []
     params = {
         "v": "111",
-        "f": f"{sec_filter},cap_midlarge,ta_sma50_pa,sh_opt_option",
+        "f": f"{sec_filter},cap_midlarge,sh_opt_option,ta_highstock50d_b0to3h,sh_avgvol_o1000",
         "auth": fv.token,
         "o": "-perf13w",
     }
@@ -483,14 +480,8 @@ def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25)
             rel_vol = d.get("relative_volume", 1)
             name = ticker  # name not in get_ticker_data, use ticker
 
-            if price <= 0 or sma50 <= 0:
+            if price <= 0:
                 continue
-            if price < sma50:
-                continue
-            if high_52w > 0:
-                pct_from_high = (high_52w - price) / high_52w * 100
-                if pct_from_high > 15.0:
-                    continue
 
             rs_vs_etf = round(perf_3m - etf_perf_3m, 2)
             stocks.append({
@@ -531,7 +522,7 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
     import urllib.parse
     params = {
         "v": "152",
-        "f": "cap_smallmid,ta_sma50_pa,ta_sma200_pa,sh_opt_option,sh_price_u500",
+        "f": "cap_smallmid,ta_sma200_pa,sh_opt_option,sh_price_u500",
         "auth": fv.token,
         "o": "-perf13w",
         "c": "0,1,2,3,4,5,6,25,26,27,28,29,30,31,65,66",
