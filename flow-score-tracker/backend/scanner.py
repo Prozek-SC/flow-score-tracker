@@ -489,7 +489,7 @@ def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25)
                 continue
             if high_52w > 0:
                 pct_from_high = (high_52w - price) / high_52w * 100
-                if pct_from_high > 3.0:
+                if pct_from_high > 15.0:
                     continue
 
             rs_vs_etf = round(perf_3m - etf_perf_3m, 2)
@@ -531,7 +531,7 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
     import urllib.parse
     params = {
         "v": "152",
-        "f": "cap_smallmid,ta_highstock52w_nh,ta_sma50_pa,sh_opt_option,sh_price_u500",
+        "f": "cap_smallmid,ta_sma50_pa,ta_sma200_pa,sh_opt_option,sh_price_u500",
         "auth": fv.token,
         "o": "-perf13w",
         "c": "0,1,2,3,4,5,6,25,26,27,28,29,30,31,65,66",
@@ -575,7 +575,7 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
                 continue
             if high_52w > 0:
                 pct_from_high = (high_52w - price) / high_52w * 100
-                if pct_from_high > 1.0:
+                if pct_from_high > 5.0:
                     continue
 
             stocks.append({
