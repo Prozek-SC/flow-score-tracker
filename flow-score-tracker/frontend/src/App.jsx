@@ -424,7 +424,7 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
   const scanDesc = isBreakout
     ? "Top 3 sectors by 200MA strength · Optionable · Near 52W High · Above 50MA"
     : "Mid-cap & under · New 52W High · Above 50MA · Optionable";
-  const accentColor = "#ff6a00";
+  const accentColor = isBreakout ? "#00d4aa" : "#7b9fff";
 
   return (
     <div>
@@ -695,10 +695,10 @@ export default function App() {
           )}
           <button onClick={() => window.open(`${API_BASE}/api/export/scores`, "_blank")} style={btnStyle("#1a1a2e", "#888")}>↓ CSV</button>
           <button onClick={runBothScanners} disabled={scanningMarket}
-            style={btnStyle(scanningMarket ? "#1a1a2e" : "#ff6a00", scanningMarket ? "#555" : "#000")}>
+            style={btnStyle(scanningMarket ? "#1a1a2e" : "#7b9fff", scanningMarket ? "#555" : "#000")}>
             {scanningMarket ? "⟳ Scanning..." : "▶ Run Both Scanners"}
           </button>
-          <button onClick={runScan} disabled={scanning} style={btnStyle(scanning ? "#1a1a2e" : "#ff6a00", scanning ? "#555" : "#000")}>
+          <button onClick={runScan} disabled={scanning} style={btnStyle(scanning ? "#1a1a2e" : "#00d4aa", scanning ? "#555" : "#000")}>
             {scanning ? "Scoring..." : "▶ Score Watchlist"}
           </button>
         </div>
