@@ -266,24 +266,30 @@ function StockRow({ stock, rank, sector, onAdd, added, showSector = false, accen
 
       {/* RS vs ETF (or 3M for BBS) */}
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 15, fontWeight: 700, fontFamily: "'Inter', sans-serif", color: rsColor }}>
-          {stock.rs_vs_etf > 0 ? "+" : ""}{fmt(stock.rs_vs_etf)}%
-        </div>
+        {stock.rs_vs_etf != null ? (
+          <div style={{ fontSize: 15, fontWeight: 700, fontFamily: "'Inter', sans-serif", color: rsColor }}>
+            {stock.rs_vs_etf > 0 ? "+" : ""}{fmt(stock.rs_vs_etf)}%
+          </div>
+        ) : <div style={{ fontSize: 12, color: "#444" }}>—</div>}
       </div>
 
       {/* 3M perf */}
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 15, fontFamily: "'Inter', sans-serif", color: perfColor(stock.perf_3m) }}>
-          {stock.perf_3m > 0 ? "+" : ""}{fmt(stock.perf_3m)}%
-        </div>
+        {stock.perf_3m != null ? (
+          <div style={{ fontSize: 15, fontFamily: "'Inter', sans-serif", color: perfColor(stock.perf_3m) }}>
+            {stock.perf_3m > 0 ? "+" : ""}{fmt(stock.perf_3m)}%
+          </div>
+        ) : <div style={{ fontSize: 12, color: "#444" }}>—</div>}
         <div style={{ fontSize: 11, color: "#666" }}>3M</div>
       </div>
 
       {/* 1M perf */}
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 15, fontFamily: "'Inter', sans-serif", color: perfColor(stock.perf_1m) }}>
-          {stock.perf_1m > 0 ? "+" : ""}{fmt(stock.perf_1m)}%
-        </div>
+        {stock.perf_1m != null ? (
+          <div style={{ fontSize: 15, fontFamily: "'Inter', sans-serif", color: perfColor(stock.perf_1m) }}>
+            {stock.perf_1m > 0 ? "+" : ""}{fmt(stock.perf_1m)}%
+          </div>
+        ) : <div style={{ fontSize: 12, color: "#444" }}>—</div>}
         <div style={{ fontSize: 11, color: "#666" }}>1M</div>
       </div>
 
@@ -299,7 +305,9 @@ function StockRow({ stock, rank, sector, onAdd, added, showSector = false, accen
 
       {/* Market cap */}
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 15, fontFamily: "'Inter', sans-serif", color: "#aaa" }}>${fmt(stock.mktcap_b, 1)}B</div>
+        <div style={{ fontSize: 15, fontFamily: "'Inter', sans-serif", color: "#aaa" }}>
+          {stock.mktcap_b != null ? `$${fmt(stock.mktcap_b, 1)}B` : "—"}
+        </div>
       </div>
 
       {/* Add to watchlist */}
@@ -557,6 +565,12 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
 
 // Shared stock table used by both scanners
 function StockTable({ stocks, sector, watchlistTickers, onAdd, showRsLabel, accentColor, showSector = false }) {
+  const sorted = [...stocks].sort((a, b) => {
+    const aScore = a.flow_score ?? -999;
+    const bScore = b.flow_score ?? -999;
+    if (bScore !== aScore) return bScore - aScore;
+    return (a.ticker || "").localeCompare(b.ticker || "");
+  });
   return (
     <div style={{ background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 8, overflow: "hidden" }}>
       <div style={{ display: "grid",
@@ -571,10 +585,10 @@ function StockTable({ stocks, sector, watchlistTickers, onAdd, showRsLabel, acce
           </div>
         ))}
       </div>
-      {stocks.length === 0 ? (
+      {sorted.length === 0 ? (
         <div style={{ padding: 32, textAlign: "center", color: "#888", fontSize: 14 }}>No stocks found</div>
       ) : (
-        stocks.map((s, i) => (
+        sorted.map((s, i) => (
           <StockRow key={s.ticker} stock={s} rank={i + 1} sector={sector || s.sector}
             onAdd={onAdd} added={watchlistTickers.has(s.ticker)}
             showSector={showSector} accentColor={accentColor} />
