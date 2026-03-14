@@ -372,7 +372,7 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
       const json = await res.json();
       if (json.success && json.data) {
         setData(json.data);
-        setLastRun(json.run_date || json.data.run_at);
+        setLastRun(json.data.run_at || json.run_date);
         setCacheNotice(json.cache_notice || null);
         if (isBreakout && json.data.top_sectors?.length > 0) {
           setSelectedSector(prev => prev || json.data.top_sectors[0].sector);
