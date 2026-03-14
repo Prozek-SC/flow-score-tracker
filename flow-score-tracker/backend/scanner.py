@@ -221,13 +221,13 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
 
 def run_big_blue_sky_scanner(limit: int = 50) -> list:
     """
-    Big Blue Sky Scanner:
+    Big Blue Sky Scanner (matches Finviz preset):
     - Mid-cap and under (market cap < $10B)
-    - Price < $500
-    - New 52-week high (price within 1% of 52w high)
-    - Above SMA50
-    - Optionable (options volume > 1)
-    - Short interest > 1%
+    - Optionable and shortable
+    - RSI > 50 (not oversold)
+    - Avg volume < 500K (smaller/emerging names)
+    - IPO in last 2 years
+    - 50-day high/low: New High
     """
     print("  Running Big Blue Sky Scanner...")
     try:
@@ -236,17 +236,16 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
                 'name', 'description', 'close', 'SMA200', 'SMA50',
                 'Perf.3M', 'Perf.1M', 'Perf.W',
                 'relative_volume_10d_calc', 'market_cap_basic', 'sector',
-                'short_ratio', '52WeekHigh'
+                'RSI', 'High.1M', 'volume', 'average_volume_10d_calc',
+                'earnings_release_date'
             )
             .set_markets('america')
             .where(
-                col('market_cap_basic') < 10e9,          # mid-cap and under
-                col('market_cap_basic') > 3e8,           # at least $300M
-                col('close') < 500,                      # under $500
+                col('market_cap_basic') < 10e9,           # under $10B
                 col('exchange').isin(['NASDAQ', 'NYSE']),
                 col('is_primary') == True,
-                
-                col('short_ratio') > 1,                  # short interest > 1
+                col('RSI') > 50,                          # not oversold
+                col('average_volume_10d_calc') < 500000,  # avg vol < 500K
             )
             .order_by('Perf.3M', ascending=False)
             .limit(300)
@@ -255,6 +254,9 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
     except Exception as e:
         print(f"    Big Blue Sky screener error: {e}")
         return []
+
+    from datetime import datetime as _dt
+    two_years_ago = (_dt.now().replace(year=_dt.now().year - 2)).date()
 
     stocks = []
     for _, row in df.iterrows():
@@ -265,13 +267,14 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
         perf_1m = safe_float(row.get('Perf.1M'))
         rel_vol = safe_float(row.get('relative_volume_10d_calc'))
         mktcap = safe_float(row.get('market_cap_basic'))
-        high_52w = safe_float(row.get('52WeekHigh'))
+        high_1m = safe_float(row.get('High.1M'))
+        rsi = safe_float(row.get('RSI'))
 
-        # nh: near 52-week high — price within 5% of 52w high
-        if high_52w > 0:
-            pct_from_high = (high_52w - price) / high_52w * 100
-            if pct_from_high > 5.0:
-                continue  # not near high
+        # 50-day new high: price within 1% of 1-month high
+        if high_1m > 0:
+            pct_from_high = (high_1m - price) / high_1m * 100
+            if pct_from_high > 1.0:
+                continue
 
         stocks.append({
             "ticker": str(row['name']),
@@ -280,11 +283,12 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
             "ma200": round(ma200, 2),
             "ma50": round(ma50, 2),
             "above_200ma": bool(price > ma200) if ma200 else None,
-            "above_50ma": True,
+            "above_50ma": bool(price > ma50) if ma50 else None,
             "perf_3m": round(perf_3m, 2),
             "perf_1m": round(perf_1m, 2),
-            "rs_vs_etf": round(perf_3m, 2),  # no sector ETF baseline; use abs 3M perf
+            "rs_vs_etf": round(perf_3m, 2),
             "rel_vol": round(rel_vol, 2),
+            "rsi": round(rsi, 1),
             "mktcap_b": round(mktcap / 1e9, 1),
             "scanner": "bigbluesky",
             "sector": str(row.get('sector') or ''),
@@ -522,7 +526,7 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
     import urllib.parse
     params = {
         "v": "152",
-        "f": "cap_smallmid,ta_sma200_pa,sh_opt_option,sh_price_u500",
+        "f": "cap_smallmid,sh_opt_option,ta_rsi_nos50,sh_avgvol_u500,ipo_more2yrs,ta_highstock50d_nh",
         "auth": fv.token,
         "o": "-perf13w",
         "c": "0,1,2,3,4,5,6,25,26,27,28,29,30,31,65,66",
@@ -560,14 +564,9 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
             rel_vol = d.get("relative_volume", 1)
             sector = d.get("sector", "")
 
-            if price <= 0 or price > 500:
+            if price <= 0:
                 continue
-            if mktcap > 10e9 or mktcap < 300e6:
-                continue
-            if high_52w > 0:
-                pct_from_high = (high_52w - price) / high_52w * 100
-                if pct_from_high > 5.0:
-                    continue
+            if mktcap > 10e9:
 
             stocks.append({
                 "ticker": ticker,
