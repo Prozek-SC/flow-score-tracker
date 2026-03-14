@@ -567,6 +567,7 @@ def run_big_blue_sky_finviz(limit: int = 50) -> list:
             if price <= 0:
                 continue
             if mktcap > 10e9:
+                continue
 
             stocks.append({
                 "ticker": ticker,
