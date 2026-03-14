@@ -380,7 +380,7 @@ def trigger_scanner():
                 return jsonify({
                     "success": True,
                     "cached": True,
-                    "message": f"Markets closed — showing last scan from {row['run_date']}",
+                    "message": f"Markets closed — showing last scan from {row.get('updated_at', row['run_date'])[:16].replace('T', ' ')}",
                     "run_date": row["run_date"],
                 })
         except Exception as e:
@@ -452,7 +452,7 @@ def get_scanner_results():
                 "data": data,
                 "run_date": row["run_date"],
                 "is_cached": not trading_day,
-                "cache_notice": None if trading_day else f"Markets closed — showing last scan from {row['run_date']}",
+                "cache_notice": None if trading_day else f"Markets closed — showing last scan from {row.get('updated_at', row['run_date'])[:16].replace('T', ' ')}",
             })
         return jsonify({"success": False, "message": "No scanner results yet"})
     except Exception as e:
