@@ -76,7 +76,7 @@ def scanner_job():
             for s in top_in_sector:
                 top10.append({"ticker": s["ticker"], "sector": sname, "rs": s.get("rs_vs_etf", 0)})
 
-        bbs = results.get("big_blue_sky", [])[:10]
+        bbs = results.get("big_blue_sky", [])
         for s in bbs:
             top10.append({"ticker": s["ticker"], "sector": s.get("sector", ""), "rs": s.get("perf_3m", 0)})
 
@@ -403,7 +403,7 @@ def trigger_scanner():
                 for s in top_in_sector:
                     top10.append({"ticker": s["ticker"], "sector": sname, "rs": s.get("rs_vs_etf", 0)})
 
-            bbs = results.get("big_blue_sky", [])[:10]
+            bbs = results.get("big_blue_sky", [])
             for s in bbs:
                 top10.append({"ticker": s["ticker"], "sector": s.get("sector", ""), "rs": s.get("perf_3m", 0)})
 
