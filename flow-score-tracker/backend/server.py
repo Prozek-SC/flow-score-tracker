@@ -146,6 +146,18 @@ def add_ticker():
         sb.table("watchlist").update({"active": True, "sector": sector}).eq("ticker", ticker).execute()
     else:
         sb.table("watchlist").insert({"ticker": ticker, "sector": sector, "active": True}).execute()
+
+    # Score the new ticker immediately in the background
+    import threading
+    def _score_new():
+        try:
+            from pipeline import score_tickers
+            results = score_tickers([{"ticker": ticker, "sector": sector}])
+            print(f"  Auto-scored {ticker} on watchlist add: {results[0].get('flow_score') if results else 'no result'}")
+        except Exception as e:
+            print(f"  Auto-score error for {ticker}: {e}")
+    threading.Thread(target=_score_new, daemon=True).start()
+
     return jsonify({"success": True, "ticker": ticker})
 
 @app.route("/api/watchlist/<ticker>", methods=["DELETE"])
@@ -339,12 +351,12 @@ def trigger_weekly():
     import threading
     def run():
         try:
-            results = run_weekly_flow_score()
-            send_weekly_report(results)
+            run_weekly_flow_score()
+            print("Weekly score run complete (no email — manual trigger)")
         except Exception as e:
             print(f"Weekly scan error: {e}")
     threading.Thread(target=run, daemon=True).start()
-    return jsonify({"success": True, "message": "Weekly scan started in background"})
+    return jsonify({"success": True, "message": "Scoring watchlist in background — check Scores tab in ~1 min"})
 
 @app.route("/api/scan/daily", methods=["POST"])
 def trigger_daily():
