@@ -98,7 +98,7 @@ def score_all_sectors(finviz: FinvizClient, _ts_client,
             "sma50": fv.get("sma50", 0),
             "sma200": fv.get("sma200", 0),
             "sma20": fv.get("price", 0),  # approximate
-            "perf_ytd": fv.get("rs_rating", 0),  # Finviz Perf Year as proxy
+            "perf_ytd": fv.get("perf_year", 0),  # 1-year perf as YTD proxy
             "perf_week": fv.get("perf_week", 0),
             "weekly_flow": fv.get("relative_volume", 1) * fv.get("avg_volume", 0) * fv.get("price", 0) / 1e6,
         }
@@ -173,7 +173,7 @@ def score_tickers(ticker_sector_list: list) -> list:
             price = fv.get("price", 0)
             ma50 = fv.get("sma50", 0)
             ma200 = fv.get("sma200", 0)
-            ma20 = price
+            ma20 = fv.get("sma20", price)  # use actual 20MA if available
 
             try:
                 uw_flow = uw.get_flow_for_ticker(ticker)
@@ -184,10 +184,13 @@ def score_tickers(ticker_sector_list: list) -> list:
 
             sector_rank = get_sector_rank_for_ticker(sector, sector_scores)
             sector_ytd = get_sector_perf(sector, sector_scores)
+            # Use sector ETF perf_quarter as flow proxy (positive = inflows)
             sector_etf_flow = 0
             for s in sector_scores:
                 if sector.lower() in s["sector"].lower():
-                    sector_etf_flow = s.get("etf_flow_m", 0)
+                    # Convert ETF 3M perf to a flow proxy: +10% perf ≈ $500M inflows
+                    etf_perf_3m = s.get("ytd_perf", 0)
+                    sector_etf_flow = etf_perf_3m * 50  # scale: 10% → $500M
                     break
 
             l1 = score_capital_flow_level1(equity_weekly, equity_avg)
@@ -266,7 +269,7 @@ def run_weekly_flow_score():
             price = fv.get("price", 0)
             ma50 = fv.get("sma50", 0)
             ma200 = fv.get("sma200", 0)
-            ma20 = price  # approximate from price
+            ma20 = fv.get("sma20", price)  # use actual 20MA if available
 
             # Options flow
             uw_flow = {}
@@ -284,7 +287,8 @@ def run_weekly_flow_score():
             sector_etf_flow = 0
             for s in sector_scores:
                 if sector.lower() in s["sector"].lower():
-                    sector_etf_flow = s.get("etf_flow_m", 0)
+                    etf_perf_3m = s.get("ytd_perf", 0)
+                    sector_etf_flow = etf_perf_3m * 50  # scale: 10% perf → $500M proxy
                     break
 
             # PILLAR 1: Capital Flow
