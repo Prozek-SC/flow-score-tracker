@@ -652,7 +652,12 @@ export default function App() {
     setScanning(true);
     try {
       await fetch(`${API_BASE}/api/scan/weekly`, { method: "POST" });
-      setTimeout(async () => { await fetchScores(); setScanning(false); }, 3000);
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        await fetchScores();
+        if (attempts >= 8) { clearInterval(poll); setScanning(false); }
+      }, 10000);
     } catch (e) { setScanning(false); }
   };
 
