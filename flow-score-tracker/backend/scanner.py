@@ -1,713 +1,658 @@
 """
-Market Scanner — TradingView Screener API
-- Top 3 sectors: sector ETF price above 200MA, ranked by distance from 200MA
-- Top 25 stocks per sector: ranked by RS vs sector ETF (3M)
-- Unusual options activity: volume/OI ratio spike
+Flow Score Pipeline
+Orchestrates weekly Flow Score + daily price updates
 """
 import os
 import json
-import math
 import requests
+import numpy as np
 from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 from supabase import create_client
-from tradingview_screener import Query, col
-from data_clients import FinvizClient
+
+from data_clients import FinvizClient, TradierOptionsClient
+from scoring_engine import (
+    score_capital_flow_level1, score_capital_flow_level2,
+    score_capital_flow_level3, score_capital_flow_pillar,
+    score_trend_pillar, score_momentum_pillar,
+    calculate_flow_score, detect_burst_trade,
+    calculate_sector_flow_score, SECTOR_ETFS
+)
 
 load_dotenv()
-
-SECTOR_ETFS = {
-    "Technology": "XLK",
-    "Healthcare": "XLV",
-    "Financials": "XLF",
-    "Consumer Discretionary": "XLY",
-    "Industrials": "XLI",
-    "Energy": "XLE",
-    "Consumer Staples": "XLP",
-    "Utilities": "XLU",
-    "Real Estate": "XLRE",
-    "Materials": "XLB",
-    "Communication Services": "XLC",
-}
-
-TV_SECTOR_MAP = {
-    "Technology": "Technology",
-    "Health Technology": "Healthcare",
-    "Health Services": "Healthcare",
-    "Finance": "Financials",
-    "Consumer Cyclicals": "Consumer Discretionary",
-    "Consumer Non-Cyclicals": "Consumer Staples",
-    "Industrials": "Industrials",
-    "Energy Minerals": "Energy",
-    "Utilities": "Utilities",
-    "Real Estate": "Real Estate",
-    "Basic Materials": "Materials",
-    "Communications": "Communication Services",
-    "Electronic Technology": "Technology",
-    "Retail Trade": "Consumer Discretionary",
-    "Producer Manufacturing": "Industrials",
-    "Commercial Services": "Industrials",
-    "Distribution Services": "Industrials",
-    "Transportation": "Industrials",
-    "Process Industries": "Materials",
-    "Non-Energy Minerals": "Materials",
-    "Consumer Services": "Consumer Discretionary",
-    "Miscellaneous": "Industrials",
-}
-
-
-def safe_float(val, default=0.0):
-    """Convert to float, replacing NaN/None/inf with default."""
-    try:
-        f = float(val)
-        if math.isnan(f) or math.isinf(f):
-            return default
-        return f
-    except:
-        return default
-
-
-def clean_nans(obj):
-    """Recursively replace NaN/inf in dicts and lists with None for JSON safety."""
-    import math as _math
-    if isinstance(obj, dict):
-        return {k: clean_nans(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [clean_nans(v) for v in obj]
-    if isinstance(obj, float):
-        if _math.isnan(obj) or _math.isinf(obj):
-            return None
-    return obj
 
 
 def get_supabase():
     return create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
 
 
-def get_nearest_expiration() -> str:
-    today = date.today()
-    days_until_friday = (4 - today.weekday()) % 7
-    if days_until_friday == 0:
-        days_until_friday = 7
-    return (today + timedelta(days=days_until_friday)).strftime("%Y-%m-%d")
+def get_watchlist(sb) -> list:
+    result = sb.table("watchlist").select("ticker,sector").eq("active", True).execute()
+    return result.data or []
 
 
 # ============================================================
-# STEP 1: SECTOR ETF 200MA RANKING
+# ICI FUND FLOW DATA (Level 1)
+# Source: ICI.org weekly report — scraped or manually entered
 # ============================================================
 
-def get_top_sectors(top_n: int = 3):
+def get_ici_fund_flows() -> dict:
+    """
+    Fetch ICI fund flow data.
+    ICI publishes weekly at ici.org/research/stats/weekly
+    We use the most recent available figures.
+    Falls back to cached Supabase data if fetch fails.
+    """
+    try:
+        # ICI data endpoint (requires account — fallback to manual entry)
+        # For now we use the fund flow data from the manual panel in the dashboard
+        sb = get_supabase()
+        result = sb.table("fund_flows").select("*").order("week_ending", desc=True).limit(5).execute()
+        rows = result.data or []
+        if rows:
+            latest = rows[0]
+            history = [{"week": r["week_ending"], "equity": r["equity_total"],
+                        "bond": r["bond_total"], "commodity": r["commodity"]} for r in rows]
+            avg_4wk = np.mean([r["equity_total"] for r in rows[:4]]) if len(rows) >= 4 else rows[0]["equity_total"]
+            return {
+                "equity_weekly": latest["equity_total"],
+                "equity_domestic": latest.get("equity_domestic", 0),
+                "equity_world": latest.get("equity_world", 0),
+                "bond_weekly": latest.get("bond_total", 0),
+                "commodity_weekly": latest.get("commodity", 0),
+                "equity_4wk_avg": avg_4wk,
+                "week_ending": latest["week_ending"],
+                "history": history,
+            }
+    except Exception as e:
+        print(f"  ICI fund flow fetch error: {e}")
+
+    # Default neutral values if no data
+    return {
+        "equity_weekly": 0, "equity_domestic": 0, "equity_world": 0,
+        "bond_weekly": 0, "commodity_weekly": 0, "equity_4wk_avg": 0,
+        "week_ending": date.today().isoformat(), "history": []
+    }
+
+
+# ============================================================
+# SECTOR SCORING
+# ============================================================
+
+def score_all_sectors(finviz: FinvizClient, _ts_client,
+                       equity_flow: float, equity_avg: float) -> list:
+    """Score all 11 sector ETFs and return ranked list"""
     etf_tickers = list(SECTOR_ETFS.values())
 
-    _, df = (Query()
-        .select('name', 'close', 'SMA200', 'Perf.3M', 'Perf.1M')
-        .set_markets('america')
-        .where(col('name').isin(etf_tickers))
-        .limit(20)
-        .get_scanner_data()
-    )
-
-    sectors = []
-    for _, row in df.iterrows():
-        etf = row['name']
-        price = safe_float(row.get('close'))
-        ma200 = safe_float(row.get('SMA200'))
-        perf_3m = safe_float(row.get('Perf.3M'))
-        perf_1m = safe_float(row.get('Perf.1M'))
-
-        if ma200 == 0:
-            continue
-
-        above_200ma = price > ma200
-        pct_from_200ma = round((price - ma200) / ma200 * 100, 2)
-        sector_name = next((k for k, v in SECTOR_ETFS.items() if v == etf), etf)
-
-        sectors.append({
-            "sector": sector_name,
-            "etf": etf,
-            "price": round(price, 2),
-            "ma200": round(ma200, 2),
-            "above_200ma": above_200ma,
-            "pct_from_200ma": pct_from_200ma,
-            "perf_3m": round(perf_3m, 2),
-            "perf_1m": round(perf_1m, 2),
-        })
-
-    sectors.sort(key=lambda x: (not x["above_200ma"], -x["pct_from_200ma"]))
-    return sectors[:top_n], sectors
-
-
-# ============================================================
-# STEP 2: TOP 25 STOCKS PER SECTOR BY RS
-# ============================================================
-
-def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int = 25) -> list:
-    """
-    50-Day Breakout Scanner filters applied within each top sector:
-    - Optionable (options_volume > 1000)
-    - Short interest > 1%
-    - Price within 0-3% below 52-week high (near highs)
-    - Price above SMA50
-    """
-    tv_sectors = [k for k, v in TV_SECTOR_MAP.items() if v == sector_name]
-    if not tv_sectors:
-        return []
-
     try:
-        _, df = (Query()
-            .select(
-                'name', 'description', 'close', 'SMA200', 'SMA50',
-                'Perf.3M', 'Perf.1M', 'Perf.W',
-                'relative_volume_10d_calc', 'market_cap_basic', 'sector',
-                'High.All', 'short_ratio',
-                '52WeekHigh', 'High.1M'
-            )
-            .set_markets('america')
-            .where(
-                col('sector').isin(tv_sectors),
-                col('market_cap_basic') > 1e9,
-                col('exchange').isin(['NASDAQ', 'NYSE']),
-                col('is_primary') == True,
-                col('relative_volume_10d_calc') > 1,    # rel vol > 1
-            )
-            .order_by('Perf.3M', ascending=False)
-            .limit(200)
-            .get_scanner_data()
-        )
+        fv_data = finviz.get_ticker_data(etf_tickers)
     except Exception as e:
-        print(f"    TV screener error for {sector_name}: {e}")
-        return []
+        print(f"  Finviz sector data error: {e}")
+        fv_data = {}
 
-    stocks = []
-    for _, row in df.iterrows():
-        price = safe_float(row.get('close'))
-        ma200 = safe_float(row.get('SMA200'))
-        ma50 = safe_float(row.get('SMA50'))
-        perf_3m = safe_float(row.get('Perf.3M'))
-        perf_1m = safe_float(row.get('Perf.1M'))
-        rel_vol = safe_float(row.get('relative_volume_10d_calc'))
-        mktcap = safe_float(row.get('market_cap_basic'))
-        high_1m = safe_float(row.get('High.1M'))   # 1-month high ≈ 50-day high
-
-        # price within 3% of 1-month high (replicates Finviz "0-3% below 50-day high")
-        if high_1m > 0:
-            pct_from_high = (high_1m - price) / high_1m * 100
-            if pct_from_high > 3.0:
-                continue
-
-        stocks.append({
-            "ticker": str(row['name']),
-            "name": str(row.get('description') or row['name']),
-            "price": round(price, 2),
-            "ma200": round(ma200, 2),
-            "ma50": round(ma50, 2),
-            "above_200ma": bool(price > ma200) if ma200 else None,
-            "above_50ma": True,  # filtered above
-            "perf_3m": round(perf_3m, 2),
-            "perf_1m": round(perf_1m, 2),
-            "rs_vs_etf": round(perf_3m - etf_perf_3m, 2),
-            "rel_vol": round(rel_vol, 2),
-            "mktcap_b": round(mktcap / 1e9, 1),
-            "scanner": "50day",
-        })
-
-    stocks.sort(key=lambda x: x["rs_vs_etf"], reverse=True)
-    return stocks[:limit]
-
-
-# ============================================================
-# BIG BLUE SKY SCANNER (standalone — no sector filter)
-# ============================================================
-
-def run_big_blue_sky_scanner(limit: int = 50) -> list:
-    """
-    Big Blue Sky Scanner (matches Finviz preset):
-    - Mid-cap and under (market cap < $10B)
-    - Optionable and shortable
-    - RSI > 50 (not oversold)
-    - Avg volume < 500K (smaller/emerging names)
-    - IPO in last 2 years
-    - 50-day high/low: New High
-    """
-    print("  Running Big Blue Sky Scanner...")
-    try:
-        _, df = (Query()
-            .select(
-                'name', 'description', 'close', 'SMA200', 'SMA50',
-                'Perf.3M', 'Perf.1M', 'Perf.W',
-                'relative_volume_10d_calc', 'market_cap_basic', 'sector',
-                'RSI', 'High.1M', 'volume', 'average_volume_10d_calc',
-                'earnings_release_date'
-            )
-            .set_markets('america')
-            .where(
-                col('market_cap_basic') < 10e9,           # under $10B
-                col('exchange').isin(['NASDAQ', 'NYSE']),
-                col('is_primary') == True,
-                col('RSI') > 50,                          # not oversold
-                col('average_volume_10d_calc') < 500000,  # avg vol < 500K
-            )
-            .order_by('Perf.3M', ascending=False)
-            .limit(300)
-            .get_scanner_data()
-        )
-    except Exception as e:
-        print(f"    Big Blue Sky screener error: {e}")
-        return []
-
-    from datetime import datetime as _dt
-    two_years_ago = (_dt.now().replace(year=_dt.now().year - 2)).date()
-
-    stocks = []
-    for _, row in df.iterrows():
-        price = safe_float(row.get('close'))
-        ma200 = safe_float(row.get('SMA200'))
-        ma50 = safe_float(row.get('SMA50'))
-        perf_3m = safe_float(row.get('Perf.3M'))
-        perf_1m = safe_float(row.get('Perf.1M'))
-        rel_vol = safe_float(row.get('relative_volume_10d_calc'))
-        mktcap = safe_float(row.get('market_cap_basic'))
-        high_1m = safe_float(row.get('High.1M'))
-        rsi = safe_float(row.get('RSI'))
-
-        # 50-day new high: price within 1% of 1-month high
-        if high_1m > 0:
-            pct_from_high = (high_1m - price) / high_1m * 100
-            if pct_from_high > 1.0:
-                continue
-
-        stocks.append({
-            "ticker": str(row['name']),
-            "name": str(row.get('description') or row['name']),
-            "price": round(price, 2),
-            "ma200": round(ma200, 2),
-            "ma50": round(ma50, 2),
-            "above_200ma": bool(price > ma200) if ma200 else None,
-            "above_50ma": bool(price > ma50) if ma50 else None,
-            "perf_3m": round(perf_3m, 2),
-            "perf_1m": round(perf_1m, 2),
-            "rs_vs_etf": round(perf_3m, 2),
-            "rel_vol": round(rel_vol, 2),
-            "rsi": round(rsi, 1),
-            "mktcap_b": round(mktcap / 1e9, 1),
-            "scanner": "bigbluesky",
-            "sector": str(row.get('sector') or ''),
-        })
-
-    stocks.sort(key=lambda x: x["perf_3m"], reverse=True)
-    return stocks[:limit]
-
-
-# ============================================================
-# STEP 3: UNUSUAL OPTIONS ACTIVITY
-# ============================================================
-
-def get_unusual_options(tickers: list) -> list:
-    api_key = os.getenv("TRADIER_API_KEY", "")
-    if not api_key:
-        return []
-
-    unusual = []
-    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-
-    for ticker in tickers[:20]:
-        try:
-            resp = requests.get(
-                "https://api.tradier.com/v1/markets/options/chains",
-                headers=headers,
-                params={"symbol": ticker, "expiration": get_nearest_expiration(), "greeks": "false"},
-                timeout=5
-            )
-            if resp.status_code != 200:
-                continue
-
-            options = resp.json().get("options", {}).get("option", []) or []
-            total_vol = sum(int(o.get("volume") or 0) for o in options)
-            total_oi = sum(int(o.get("open_interest") or 0) for o in options)
-
-            if total_oi > 0 and total_vol / total_oi > 2.0 and total_vol > 500:
-                call_vol = sum(int(o.get("volume") or 0) for o in options if o.get("option_type") == "call")
-                unusual.append({
-                    "ticker": ticker,
-                    "total_volume": total_vol,
-                    "total_oi": total_oi,
-                    "vol_oi_ratio": round(total_vol / total_oi, 2),
-                    "call_vol": call_vol,
-                    "put_vol": total_vol - call_vol,
-                    "bias": "bullish" if call_vol > (total_vol - call_vol) else "bearish",
-                })
-        except Exception as e:
-            print(f"    Options error {ticker}: {e}")
-
-    unusual.sort(key=lambda x: x["vol_oi_ratio"], reverse=True)
-    return unusual
-
-
-# ============================================================
-# MAIN RUNNER
-# ============================================================
-
-
-# ============================================================
-# FINVIZ FALLBACK — works 24/7, used when TradingView returns nothing
-# (markets closed, rate limited, or weekend)
-# ============================================================
-
-# Finviz sector filter strings mapping our sector names
-FINVIZ_SECTOR_MAP = {
-    "Technology": "Technology",
-    "Healthcare": "Healthcare",
-    "Financials": "Financial",
-    "Consumer Discretionary": "Consumer Cyclical",
-    "Consumer Staples": "Consumer Defensive",
-    "Industrials": "Industrials",
-    "Energy": "Energy",
-    "Utilities": "Utilities",
-    "Real Estate": "Real Estate",
-    "Materials": "Basic Materials",
-    "Communication Services": "Communication Services",
-}
-
-def get_top_sectors_finviz() -> tuple:
-    """
-    Rank sectors by ETF 200MA strength using Finviz data.
-    Returns (top_3, all_sectors) — same shape as get_top_sectors().
-    """
-    fv = FinvizClient()
-    etf_tickers = list(SECTOR_ETFS.values())
-    data = fv.get_ticker_data(etf_tickers)
-
-    if not data:
-        print("  Finviz sector fallback: no ETF data returned")
-        return [], []
-
-    sectors = []
+    sector_scores = []
     for sector_name, etf in SECTOR_ETFS.items():
-        d = data.get(etf)
-        if not d:
-            continue
-        price = d.get("price", 0)
-        sma200 = d.get("sma200", 0)
-        if sma200 == 0:
-            continue
-        pct_from_200ma = round((price - sma200) / sma200 * 100, 2)
-        sectors.append({
-            "sector": sector_name,
-            "etf": etf,
-            "price": round(price, 2),
-            "ma200": round(sma200, 2),
-            "above_200ma": price > sma200,
-            "pct_from_200ma": pct_from_200ma,
-            "perf_3m": d.get("perf_quarter", 0),
-            "perf_1m": d.get("perf_month", 0),
-        })
+        fv = fv_data.get(etf, {})
+        etf_data = {
+            "price": fv.get("price", 0),
+            "sma50": fv.get("sma50", 0),
+            "sma200": fv.get("sma200", 0),
+            "sma20": fv.get("price", 0),  # approximate
+            "perf_ytd": fv.get("perf_year", 0),  # 1-year perf as YTD proxy
+            "perf_week": fv.get("perf_week", 0),
+            "weekly_flow": fv.get("relative_volume", 1) * fv.get("avg_volume", 0) * fv.get("price", 0) / 1e6,
+        }
+        result = calculate_sector_flow_score(sector_name, etf_data, equity_flow, equity_avg)
+        sector_scores.append(result)
 
-    sectors.sort(key=lambda x: (not x["above_200ma"], -x["pct_from_200ma"]))
-    print(f"  Finviz sector fallback: ranked {len(sectors)} sectors")
-    return sectors[:3], sectors
+    # Sort by flow score descending and assign rank
+    sector_scores.sort(key=lambda x: x["flow_score"], reverse=True)
+    for i, s in enumerate(sector_scores):
+        s["rank"] = i + 1
+
+    return sector_scores
 
 
-def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25) -> list:
+def get_sector_rank_for_ticker(ticker_sector: str, sector_scores: list) -> int:
+    """Find rank of a ticker's sector in the sector rankings"""
+    for s in sector_scores:
+        if ticker_sector.lower() in s["sector"].lower() or s["sector"].lower() in ticker_sector.lower():
+            return s["rank"]
+    return 6  # default neutral rank
+
+
+def get_sector_perf(ticker_sector: str, sector_scores: list) -> float:
+    for s in sector_scores:
+        if ticker_sector.lower() in s["sector"].lower():
+            return s.get("ytd_perf", 0)
+    return 0
+
+
+# ============================================================
+# WEEKLY FLOW SCORE
+# ============================================================
+
+def score_tickers(ticker_sector_list: list) -> list:
     """
-    50-Day Breakout stocks via Finviz fallback for a given sector.
-    Applies same filters: above SMA50, within 3% of 52W high, optionable.
-    Uses Finviz screener URL to get a batch of candidates, then filters.
+    Score an arbitrary list of [{"ticker": ..., "sector": ...}] dicts.
+    Used by scanner to score top results without requiring watchlist membership.
     """
-    finviz_sector = FINVIZ_SECTOR_MAP.get(sector_name)
-    if not finviz_sector:
-        return []
-
-    fv = FinvizClient()
-    if not fv.token:
-        return []
-
-    # Use Finviz screener export with sector + basic filters
-    # Filters: sector, above SMA50, market cap > $1B, optionable
-    import urllib.parse
-    # Finviz sector filter codes
-    sector_filter_map = {
-        "Technology": "sec_technology",
-        "Healthcare": "sec_healthcare",
-        "Financials": "sec_financial",
-        "Consumer Discretionary": "sec_consumercyclical",
-        "Consumer Staples": "sec_consumerdefensive",
-        "Industrials": "sec_industrials",
-        "Energy": "sec_energy",
-        "Utilities": "sec_utilities",
-        "Real Estate": "sec_realestate",
-        "Materials": "sec_basicmaterials",
-        "Communication Services": "sec_communicationservices",
-    }
-    sec_filter = sector_filter_map.get(sector_name, "")
-    if not sec_filter:
-        return []
-    params = {
-        "v": "111",
-        "f": f"{sec_filter},cap_midlarge,sh_opt_option,ta_highstock50d_b0to3h,sh_avgvol_o1000",
-        "auth": fv.token,
-        "o": "-perf13w",
-    }
-    url = f"https://elite.finviz.com/export.ashx?{urllib.parse.urlencode(params)}"
-
-    try:
-        import requests as _req, pandas as _pd
-        from io import StringIO as _SIO
-        resp = _req.get(url, timeout=15)
-        print(f"  Finviz 50-day [{sector_name}]: HTTP {resp.status_code}, {len(resp.text)} chars")
-        if resp.status_code != 200:
-            print(f"  Finviz response: {resp.text[:200]}")
-            return []
-        df = _pd.read_csv(_SIO(resp.text))
-        if df.empty:
-            print(f"  Finviz 50-day [{sector_name}]: empty")
-            return []
-
-        # Extract candidate tickers from screener results
-        candidate_tickers = [str(row.get("Ticker","")).strip() for _, row in df.iterrows() if str(row.get("Ticker","")).strip()]
-        candidate_tickers = candidate_tickers[:100]  # cap to avoid huge requests
-        print(f"  Finviz 50-day [{sector_name}]: {len(candidate_tickers)} candidates, fetching full data...")
-
-        # Step 2: get full technical data for all candidates
-        full_data = fv.get_ticker_data(candidate_tickers)
-        if not full_data:
-            return []
-
-        stocks = []
-        for ticker, d in full_data.items():
-            price = d.get("price", 0)
-            sma50 = d.get("sma50", 0)
-            sma200 = d.get("sma200", 0)
-            high_52w = d.get("52w_high", 0)
-            perf_3m = d.get("perf_quarter", 0)
-            perf_1m = d.get("perf_month", 0)
-            mktcap = d.get("market_cap", 0)
-            rel_vol = d.get("relative_volume", 1)
-            name = ticker  # name not in get_ticker_data, use ticker
-
-            if price <= 0:
-                continue
-
-            rs_vs_etf = round(perf_3m - etf_perf_3m, 2)
-            stocks.append({
-                "ticker": ticker,
-                "name": name,
-                "price": round(price, 2),
-                "ma200": round(sma200, 2),
-                "ma50": round(sma50, 2),
-                "above_200ma": bool(price > sma200) if sma200 else None,
-                "above_50ma": True,
-                "perf_3m": round(perf_3m, 2),
-                "perf_1m": round(perf_1m, 2),
-                "rs_vs_etf": rs_vs_etf,
-                "rel_vol": round(rel_vol, 2),
-                "mktcap_b": round(mktcap / 1e9, 1) if mktcap > 0 else 0,
-                "scanner": "50day",
-            })
-
-        stocks.sort(key=lambda x: x["rs_vs_etf"], reverse=True)
-        print(f"  Finviz 50-day fallback [{sector_name}]: {len(stocks[:limit])} stocks")
-        return stocks[:limit]
-
-    except Exception as e:
-        print(f"  Finviz stock fallback error [{sector_name}]: {e}")
-        return []
-
-
-def run_big_blue_sky_finviz(limit: int = 50) -> list:
-    """
-    Big Blue Sky via Finviz fallback.
-    Same filters: mid-cap, new 52W high (within 1%), above SMA50, optionable.
-    """
-    fv = FinvizClient()
-    if not fv.token:
-        return []
-
-    import urllib.parse
-    import urllib.parse
-    params = {
-        "v": "152",
-        "f": "cap_smallmid,sh_opt_option,ta_rsi_nos50,sh_avgvol_u500,ipo_more2yrs,ta_highstock50d_nh",
-        "auth": fv.token,
-        "o": "-perf13w",
-        "c": "0,1,2,3,4,5,6,25,26,27,28,29,30,31,65,66",
-    }
-    url = f"https://elite.finviz.com/export.ashx?{urllib.parse.urlencode(params)}"
-
-    try:
-        import requests as _req, pandas as _pd
-        from io import StringIO as _SIO
-        resp = _req.get(url, timeout=15)
-        if resp.status_code != 200:
-            return []
-        df = _pd.read_csv(_SIO(resp.text))
-        if df.empty:
-            return []
-
-        # Step 1: get candidate tickers from screener
-        candidate_tickers = [str(row.get("Ticker","")).strip() for _, row in df.iterrows() if str(row.get("Ticker","")).strip()]
-        candidate_tickers = candidate_tickers[:100]
-        print(f"  Finviz BBS: {len(candidate_tickers)} candidates, fetching full data...")
-
-        # Step 2: get full technical data
-        full_data = fv.get_ticker_data(candidate_tickers)
-        if not full_data:
-            return []
-
-        stocks = []
-        for ticker, d in full_data.items():
-            price = d.get("price", 0)
-            sma50 = d.get("sma50", 0)
-            sma200 = d.get("sma200", 0)
-            high_52w = d.get("52w_high", 0)
-            perf_3m = d.get("perf_quarter", 0)
-            mktcap = d.get("market_cap", 0)
-            rel_vol = d.get("relative_volume", 1)
-            sector = d.get("sector", "")
-
-            if price <= 0:
-                continue
-            if mktcap > 10e9:
-                continue
-
-            stocks.append({
-                "ticker": ticker,
-                "name": ticker,
-                "price": round(price, 2),
-                "ma200": round(sma200, 2),
-                "ma50": round(sma50, 2),
-                "above_200ma": bool(price > sma200) if sma200 else None,
-                "perf_3m": round(perf_3m, 2),
-                "rel_vol": round(rel_vol, 2),
-                "mktcap_b": round(mktcap / 1e9, 1),
-                "sector": sector,
-                "scanner": "bigbluesky",
-            })
-
-        stocks.sort(key=lambda x: x["perf_3m"], reverse=True)
-        print(f"  Finviz BBS fallback: {len(stocks[:limit])} stocks")
-        return stocks[:limit]
-
-    except Exception as e:
-        print(f"  Finviz BBS fallback error: {e}")
-        return []
-
-def run_scanner() -> dict:
-    print(f"[{datetime.now()}] Running Market Scanner...")
+    print(f"[{datetime.now()}] Scoring {len(ticker_sector_list)} tickers...")
     sb = get_supabase()
+    finviz = FinvizClient()
+    uw = TradierOptionsClient()
 
-    # ── 50-DAY BREAKOUT: sector-filtered ──
-    print("  Fetching sector ETF data...")
+    tickers = [t["ticker"] for t in ticker_sector_list]
+
+    fund_flows = get_ici_fund_flows()
+    equity_weekly = fund_flows["equity_weekly"]
+    equity_avg = fund_flows["equity_4wk_avg"]
+
+    sector_scores = score_all_sectors(finviz, None, equity_weekly, equity_avg)
+
+    # Fetch all tickers + SPY in one Finviz batch call
     try:
-        top_sectors, all_sectors = get_top_sectors(top_n=3)
+        fv_batch = finviz.get_ticker_data(tickers + ["SPY"])
     except Exception as e:
-        print(f"  Sector fetch error: {e}")
-        top_sectors, all_sectors = [], []
+        print(f"  Finviz error: {e}")
+        fv_batch = {}
 
-    # Fall back to Finviz if TradingView returned nothing (markets closed/weekend)
-    using_finviz = False
-    if not top_sectors:
-        print("  TradingView returned no sectors — trying Finviz fallback...")
+    # SPY 63-day perf from Finviz perf_quarter field
+    spy_fv = fv_batch.get("SPY", {})
+    spy_perf_63d = spy_fv.get("perf_quarter", 0)
+
+    results = []
+    for item in ticker_sector_list:
+        ticker = item["ticker"]
+        sector = item.get("sector", "")
+        print(f"  Scoring {ticker}...")
         try:
-            top_sectors, all_sectors = get_top_sectors_finviz()
-            using_finviz = True
-            print(f"  Finviz fallback sectors: {[s['sector'] for s in top_sectors]}")
+            bars = []  # No bar data — all signals use Finviz
+
+            fv = fv_batch.get(ticker, {})
+            price = fv.get("price", 0)
+            ma50 = fv.get("sma50", 0)
+            ma200 = fv.get("sma200", 0)
+            ma20 = fv.get("sma20", price)  # use actual 20MA if available
+
+            try:
+                uw_flow = uw.get_flow_for_ticker(ticker)
+                uw_unusual = uw.get_unusual_activity(ticker)
+                merged_flow = {**uw_flow, **uw_unusual}
+            except:
+                merged_flow = {}
+
+            sector_rank = get_sector_rank_for_ticker(sector, sector_scores)
+            sector_ytd = get_sector_perf(sector, sector_scores)
+            # Use sector ETF perf_quarter as flow proxy (positive = inflows)
+            sector_etf_flow = 0
+            for s in sector_scores:
+                if sector.lower() in s["sector"].lower():
+                    # Convert ETF 3M perf to a flow proxy: +10% perf ≈ $500M inflows
+                    etf_perf_3m = s.get("ytd_perf", 0)
+                    sector_etf_flow = etf_perf_3m * 50  # scale: 10% → $500M
+                    break
+
+            l1 = score_capital_flow_level1(equity_weekly, equity_avg)
+            l2 = score_capital_flow_level2(sector_ytd, sector_etf_flow, sector_rank)
+            l3 = score_capital_flow_level3(bars, fv, merged_flow)
+            capital_flow = score_capital_flow_pillar(l1, l2, l3)
+            trend = score_trend_pillar(price, ma20, ma50, ma200, bars)
+            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_ytd)
+
+            result = calculate_flow_score(capital_flow, trend, momentum)
+            result["ticker"] = ticker
+            result["price"] = price
+            result["sector"] = sector
+            result["date"] = date.today().isoformat()
+
+            prev = get_previous_score(sb, ticker)
+            result["burst"] = detect_burst_trade(result["flow_score"], prev)
+
+            results.append(result)
+            save_weekly_score(sb, ticker, result)
+
         except Exception as e:
-            print(f"  Finviz sector fallback error: {e}")
+            print(f"  ERROR scoring {ticker}: {e}")
 
-    print(f"  Top sectors: {[s['sector'] for s in top_sectors]}")
+    print(f"[{datetime.now()}] Scored {len(results)} tickers.")
+    return results
 
-    sector_stocks = {}
-    all_top_tickers = []
 
-    for sector_data in top_sectors:
-        sector = sector_data["sector"]
-        etf_perf = sector_data.get("perf_3m", 0)
-        print(f"  Scanning {sector} (ETF 3M: {etf_perf}%)...")
+def run_weekly_flow_score():
+    """
+    Full Flow Score calculation. Run weekly (Fridays after close).
+    """
+    print(f"[{datetime.now()}] Running WEEKLY Flow Score...")
+    sb = get_supabase()
+    finviz = FinvizClient()
+    uw = TradierOptionsClient()
+
+    watchlist = get_watchlist(sb)
+    if not watchlist:
+        print("  No tickers in watchlist.")
+        return []
+
+    tickers = [w["ticker"] for w in watchlist]
+
+    # --- Level 1: ICI Fund Flows ---
+    fund_flows = get_ici_fund_flows()
+    equity_weekly = fund_flows["equity_weekly"]
+    equity_avg = fund_flows["equity_4wk_avg"]
+    print(f"  Equity flow: ${equity_weekly/1000:.1f}B (4wk avg: ${equity_avg/1000:.1f}B)")
+
+    # --- Level 2: Sector Scores ---
+    sector_scores = score_all_sectors(finviz, None, equity_weekly, equity_avg)
+    save_sector_scores(sb, sector_scores)
+    print(f"  Sectors scored. Top: {sector_scores[0]['sector']} ({sector_scores[0]['flow_score']})")
+
+    # --- Finviz batch fetch (tickers + SPY for RS baseline) ---
+    try:
+        fv_batch = finviz.get_ticker_data(tickers + ["SPY"])
+    except Exception as e:
+        print(f"  Finviz error: {e}")
+        fv_batch = {}
+
+    # --- SPY 63-day perf from Finviz perf_quarter ---
+    spy_perf_63d = fv_batch.get("SPY", {}).get("perf_quarter", 0)
+
+    results = []
+    for w in watchlist:
+        ticker = w["ticker"]
+        sector = w.get("sector", "")
+        print(f"  Scoring {ticker}...")
+
         try:
-            stocks = get_top_stocks_for_sector(sector, etf_perf) if not using_finviz else []
-            # If TradingView returned no stocks, fall back to Finviz
-            if not stocks:
-                print(f"    TV returned 0 stocks for {sector} — trying Finviz fallback...")
-                stocks = get_top_stocks_finviz(sector, etf_perf)
-                if stocks:
-                    using_finviz = True
-            sector_stocks[sector] = stocks
-            all_top_tickers.extend([s["ticker"] for s in stocks[:10]])
-            if stocks:
-                print(f"    Top: {stocks[0]['ticker']} RS={stocks[0]['rs_vs_etf']}%")
+            bars = []  # No bar data — all signals use Finviz
+
+            fv = fv_batch.get(ticker, {})
+            price = fv.get("price", 0)
+            ma50 = fv.get("sma50", 0)
+            ma200 = fv.get("sma200", 0)
+            ma20 = fv.get("sma20", price)  # use actual 20MA if available
+
+            # Options flow
+            uw_flow = {}
+            uw_unusual = {}
+            try:
+                uw_flow = uw.get_flow_for_ticker(ticker)
+                uw_unusual = uw.get_unusual_activity(ticker)
+                merged_flow = {**uw_flow, **uw_unusual}
+            except:
+                merged_flow = {}
+
+            # Sector context
+            sector_rank = get_sector_rank_for_ticker(sector, sector_scores)
+            sector_ytd = get_sector_perf(sector, sector_scores)
+            sector_etf_flow = 0
+            for s in sector_scores:
+                if sector.lower() in s["sector"].lower():
+                    etf_perf_3m = s.get("ytd_perf", 0)
+                    sector_etf_flow = etf_perf_3m * 50  # scale: 10% perf → $500M proxy
+                    break
+
+            # PILLAR 1: Capital Flow
+            l1 = score_capital_flow_level1(equity_weekly, equity_avg)
+            l2 = score_capital_flow_level2(sector_ytd, sector_etf_flow, sector_rank)
+            l3 = score_capital_flow_level3(bars, fv, merged_flow)
+            capital_flow = score_capital_flow_pillar(l1, l2, l3)
+
+            # PILLAR 2: Trend
+            trend = score_trend_pillar(price, ma20, ma50, ma200, bars)
+
+            # PILLAR 3: Momentum
+            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_ytd)
+
+            # COMPOSITE
+            result = calculate_flow_score(capital_flow, trend, momentum)
+            result["ticker"] = ticker
+            result["price"] = price
+            result["sector"] = sector
+            result["date"] = date.today().isoformat()
+
+            # Get previous score for burst detection
+            prev = get_previous_score(sb, ticker)
+            burst = detect_burst_trade(result["flow_score"], prev)
+            result["burst"] = burst
+
+            results.append(result)
+            save_weekly_score(sb, ticker, result)
+
         except Exception as e:
-            print(f"    Error: {e}")
-            sector_stocks[sector] = []
+            print(f"  ERROR scoring {ticker}: {e}")
 
-    # ── BIG BLUE SKY ──
-    try:
-        big_blue_sky = run_big_blue_sky_scanner()
-        if not big_blue_sky:
-            print("  BBS TV returned 0 — trying Finviz fallback...")
-            big_blue_sky = run_big_blue_sky_finviz()
-            if big_blue_sky:
-                using_finviz = True
-        all_top_tickers.extend([s["ticker"] for s in big_blue_sky[:20]])
-        print(f"  Big Blue Sky: {len(big_blue_sky)} stocks found")
-    except Exception as e:
-        print(f"  Big Blue Sky error: {e}")
-        big_blue_sky = []
+    # Capital Flow Leaders & Exits
+    save_flow_leaders_exits(sb, results)
 
-    # ── UNUSUAL OPTIONS ──
-    print("  Checking unusual options activity...")
-    unusual = get_unusual_options(list(dict.fromkeys(all_top_tickers)))
-    print(f"  Found {len(unusual)} unusual activity flags")
+    # Weekly sector snapshot (for WoW rotation tracking)
+    save_sector_snapshot(sb, sector_scores)
 
-    # ── FETCH SCORES from Supabase ──
-    print("  Fetching scores from Supabase...")
-    score_map = {}
-    try:
-        all_tickers = list({t for stocks in sector_stocks.values() for t in [s["ticker"] for s in stocks]})
-        all_tickers += [s["ticker"] for s in big_blue_sky]
-        all_tickers = list(set(all_tickers))
-        if all_tickers:
-            rows = sb.table("weekly_scores").select("ticker, flow_score, rating").in_("ticker", all_tickers).execute()
-            for row in (rows.data or []):
-                score_map[row["ticker"]] = {
-                    "flow_score": row.get("flow_score"),
-                    "rating": row.get("rating"),
-                }
-        print(f"  Found scores for {len(score_map)} tickers")
-    except Exception as e:
-        print(f"  Score fetch error: {e}")
+    # Score change + sector transition detection (for email alerts)
+    score_changes = get_score_changes(sb, results)
+    sector_transitions = get_sector_transitions(sb, sector_scores)
 
-    # Merge scores
-    for sector in sector_stocks:
-        for stock in sector_stocks[sector]:
-            s = score_map.get(stock["ticker"], {})
-            stock["flow_score"] = s.get("flow_score")
-            stock["rating"] = s.get("rating")
+    print(f"[{datetime.now()}] Weekly Flow Score complete. {len(results)} tickers.")
+    print(f"  Surges: {len(score_changes['surges'])} | Fades: {len(score_changes['fades'])}")
+    print(f"  Sector transitions: {len(sector_transitions)}")
 
-    for stock in big_blue_sky:
-        s = score_map.get(stock["ticker"], {})
-        stock["flow_score"] = s.get("flow_score")
-        stock["rating"] = s.get("rating")
-
-    output = clean_nans({
-        "run_date": date.today().isoformat(),
-        "run_at": datetime.now().isoformat(),
-        "data_source": "finviz" if using_finviz else "tradingview",
-        "top_sectors": top_sectors,
-        "all_sectors": all_sectors,
-        "sector_stocks": sector_stocks,
-        "big_blue_sky": big_blue_sky,
-        "unusual_activity": unusual,
+    # Attach meta for email report
+    results.append({
+        "_is_meta": True,
+        "score_changes": score_changes,
+        "sector_transitions": sector_transitions,
     })
+    return results
+
+
+# ============================================================
+# DAILY PRICE UPDATE (lightweight — no full rescore)
+# ============================================================
+
+def run_daily_price_update():
+    """
+    Daily update: refresh price, MA position, relative volume only.
+    Does NOT recalculate full Flow Score (that's weekly).
+    """
+    print(f"[{datetime.now()}] Running daily price update...")
+    sb = get_supabase()
+    finviz = FinvizClient()
+
+    watchlist = get_watchlist(sb)
+    if not watchlist:
+        return
+
+    tickers = [w["ticker"] for w in watchlist]
 
     try:
-        sb.table("scanner_results").upsert({
-            "run_date": date.today().isoformat(),
-            "results": json.dumps(output),
-            "updated_at": datetime.now().isoformat(),
-        }, on_conflict="run_date").execute()
-        print("  Saved to Supabase.")
-    except Exception as e:
-        print(f"  Save error: {e}")
+        fv_data = finviz.get_ticker_data(tickers)
+    except:
+        fv_data = {}
 
-    print(f"[{datetime.now()}] Scanner complete.")
-    return output
+    updates = []
+    for w in watchlist:
+        ticker = w["ticker"]
+        fv = fv_data.get(ticker, {})
+
+        try:
+            price = fv.get("price", 0)
+            ma50 = fv.get("sma50", 0)
+            ma200 = fv.get("sma200", 0)
+            rel_vol = fv.get("relative_volume", 0)
+
+            row = {
+                "ticker": ticker,
+                "date": date.today().isoformat(),
+                "price": price,
+                "ma50": ma50,
+                "ma200": ma200,
+                "relative_volume": rel_vol,
+                "above_50ma": price > ma50 if ma50 else None,
+                "above_200ma": price > ma200 if ma200 else None,
+                "updated_at": datetime.now().isoformat(),
+            }
+            sb.table("daily_prices").upsert(row, on_conflict="ticker,date").execute()
+            updates.append(ticker)
+        except Exception as e:
+            print(f"  Price update error {ticker}: {e}")
+
+    print(f"  Updated {len(updates)} tickers.")
+
+
+# ============================================================
+# DATABASE HELPERS
+# ============================================================
+
+def get_previous_score(sb, ticker: str) -> float:
+    try:
+        result = sb.table("weekly_scores") \
+            .select("flow_score") \
+            .eq("ticker", ticker) \
+            .order("date", desc=True) \
+            .limit(2) \
+            .execute()
+        rows = result.data or []
+        return rows[1]["flow_score"] if len(rows) >= 2 else 0
+    except:
+        return 0
+
+
+def save_weekly_score(sb, ticker: str, result: dict):
+    row = {
+        "ticker": ticker,
+        "date": result.get("date", date.today().isoformat()),
+        "flow_score": result.get("flow_score", 0),
+        "rating": result.get("rating", ""),
+        "label": result.get("label", ""),
+        "action": result.get("action", ""),
+        "price": result.get("price", 0),
+        "sector": result.get("sector", ""),
+        "pillars": json.dumps(result.get("pillars", {})),
+        "burst": json.dumps(result.get("burst", {})),
+        "scored_at": result.get("scored_at", datetime.now().isoformat()),
+    }
+    sb.table("weekly_scores").upsert(row, on_conflict="ticker,date").execute()
+
+
+def save_sector_scores(sb, sector_scores: list):
+    for s in sector_scores:
+        row = {
+            "date": date.today().isoformat(),
+            "sector": s["sector"],
+            "etf": s["etf"],
+            "flow_score": s["flow_score"],
+            "capital_flow": s["capital_flow"],
+            "trend": s["trend"],
+            "momentum": s["momentum"],
+            "etf_flow_m": s.get("etf_flow_m", 0),
+            "ytd_perf": s.get("ytd_perf", 0),
+            "status": s["status"],
+            "rank": s["rank"],
+        }
+        sb.table("sector_scores").upsert(row, on_conflict="date,sector").execute()
+
+
+def save_sector_snapshot(sb, sector_scores: list):
+    """
+    Save weekly sector snapshot every Friday (or on manual weekly run).
+    Preserves one row per sector per week for WoW rotation tracking.
+    """
+    # Use Friday's date as the week_ending anchor
+    today = date.today()
+    days_since_friday = (today.weekday() - 4) % 7
+    week_ending = (today - timedelta(days=days_since_friday)).isoformat()
+
+    for s in sector_scores:
+        row = {
+            "week_ending": week_ending,
+            "sector": s["sector"],
+            "etf": s.get("etf", ""),
+            "flow_score": s["flow_score"],
+            "capital_flow": s["capital_flow"],
+            "trend": s["trend"],
+            "momentum": s["momentum"],
+            "etf_flow_m": s.get("etf_flow_m", 0),
+            "ytd_perf": s.get("ytd_perf", 0),
+            "status": s["status"],
+            "rank": s.get("rank", 0),
+        }
+        sb.table("sector_snapshots").upsert(row, on_conflict="week_ending,sector").execute()
+
+    print(f"  Sector snapshots saved for week ending {week_ending}")
+
+
+def get_sector_transitions(sb, current_scores: list) -> list:
+    """
+    Compare current sector scores against last week's snapshot.
+    Returns list of notable transitions:
+      - NEUTRAL → LEADING (score crossed 70)
+      - LEADING → NEUTRAL (score dropped below 70)
+      - Large score jumps (±10 pts)
+    """
+    try:
+        # Get most recent prior snapshot (before this week)
+        today = date.today()
+        days_since_friday = (today.weekday() - 4) % 7
+        this_week = (today - timedelta(days=days_since_friday)).isoformat()
+
+        result = sb.table("sector_snapshots") \
+            .select("*") \
+            .lt("week_ending", this_week) \
+            .order("week_ending", desc=True) \
+            .limit(11) \
+            .execute()
+
+        prior = {r["sector"]: r for r in (result.data or [])}
+        if not prior:
+            return []
+
+        transitions = []
+        for s in current_scores:
+            sector = s["sector"]
+            curr_score = s["flow_score"]
+            curr_status = s["status"]
+            prev = prior.get(sector)
+            if not prev:
+                continue
+
+            prev_score = prev["flow_score"]
+            prev_status = prev["status"]
+            delta = curr_score - prev_score
+
+            transition = None
+
+            # Status transitions
+            if prev_status != "LEADING" and curr_status == "LEADING":
+                transition = {
+                    "sector": sector, "etf": s.get("etf", ""),
+                    "type": "breakout",
+                    "label": "→ LEADING",
+                    "delta": delta,
+                    "curr_score": curr_score,
+                    "prev_score": prev_score,
+                    "priority": 1,
+                }
+            elif prev_status == "LEADING" and curr_status != "LEADING":
+                transition = {
+                    "sector": sector, "etf": s.get("etf", ""),
+                    "type": "breakdown",
+                    "label": "LEADING →",
+                    "delta": delta,
+                    "curr_score": curr_score,
+                    "prev_score": prev_score,
+                    "priority": 2,
+                }
+            elif abs(delta) >= 10:
+                transition = {
+                    "sector": sector, "etf": s.get("etf", ""),
+                    "type": "surge" if delta > 0 else "fade",
+                    "label": f"{'+' if delta > 0 else ''}{delta:.0f} pts",
+                    "delta": delta,
+                    "curr_score": curr_score,
+                    "prev_score": prev_score,
+                    "priority": 3,
+                }
+
+            if transition:
+                transitions.append(transition)
+
+        transitions.sort(key=lambda x: x["priority"])
+        return transitions
+
+    except Exception as e:
+        print(f"  Sector transition check error: {e}")
+        return []
+
+
+def get_score_changes(sb, current_results: list) -> dict:
+    """
+    Compare current weekly scores against prior week.
+    Returns: { "surges": [...], "fades": [...] }
+    Each item has ticker, curr_score, prev_score, delta, rating.
+    """
+    surges, fades = [], []
+    try:
+        tickers = [r["ticker"] for r in current_results]
+        cutoff = (date.today() - timedelta(days=14)).isoformat()
+
+        result = sb.table("weekly_scores") \
+            .select("ticker,flow_score,date") \
+            .in_("ticker", tickers) \
+            .gte("date", cutoff) \
+            .order("date", desc=True) \
+            .execute()
+
+        # Group by ticker, take two most recent
+        from collections import defaultdict
+        by_ticker = defaultdict(list)
+        for row in (result.data or []):
+            by_ticker[row["ticker"]].append(row)
+
+        curr_map = {r["ticker"]: r for r in current_results}
+
+        for ticker, rows in by_ticker.items():
+            if len(rows) < 2:
+                continue
+            curr_score = curr_map.get(ticker, {}).get("flow_score", rows[0]["flow_score"])
+            prev_score = rows[1]["flow_score"]  # second most recent
+            delta = curr_score - prev_score
+
+            item = {
+                "ticker": ticker,
+                "curr_score": curr_score,
+                "prev_score": prev_score,
+                "delta": delta,
+                "rating": curr_map.get(ticker, {}).get("rating", ""),
+                "sector": curr_map.get(ticker, {}).get("sector", ""),
+            }
+
+            if delta >= 15:
+                surges.append(item)
+            elif delta <= -15:
+                fades.append(item)
+
+        surges.sort(key=lambda x: x["delta"], reverse=True)
+        fades.sort(key=lambda x: x["delta"])
+
+    except Exception as e:
+        print(f"  Score change check error: {e}")
+
+    return {"surges": surges, "fades": fades}
+
+
+def save_flow_leaders_exits(sb, results: list):
+    """Save top 10 leaders and bottom 5 exits for dashboard panels"""
+    sorted_results = sorted(results, key=lambda x: x.get("flow_score", 0), reverse=True)
+    leaders = sorted_results[:10]
+    exits = [r for r in sorted_results if r.get("flow_score", 50) < 40][:5]
+
+    today = date.today().isoformat()
+    sb.table("flow_leaders").delete().eq("date", today).execute()
+    sb.table("flow_exits").delete().eq("date", today).execute()
+
+    for r in leaders:
+        sb.table("flow_leaders").insert({
+            "date": today, "ticker": r["ticker"],
+            "flow_score": r["flow_score"], "rating": r.get("rating", ""),
+            "sector": r.get("sector", ""),
+            "capital_flow": r.get("pillars", {}).get("capital_flow", {}).get("score", 0),
+            "trend": r.get("pillars", {}).get("trend", {}).get("score", 0),
+            "momentum": r.get("pillars", {}).get("momentum", {}).get("score", 0),
+        }).execute()
+
+    for r in exits:
+        sb.table("flow_exits").insert({
+            "date": today, "ticker": r["ticker"],
+            "flow_score": r["flow_score"], "rating": r.get("rating", ""),
+            "sector": r.get("sector", ""),
+            "capital_flow": r.get("pillars", {}).get("capital_flow", {}).get("score", 0),
+            "trend": r.get("pillars", {}).get("trend", {}).get("score", 0),
+            "momentum": r.get("pillars", {}).get("momentum", {}).get("score", 0),
+        }).execute()
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "daily":
+        run_daily_price_update()
+    else:
+        run_weekly_flow_score()
