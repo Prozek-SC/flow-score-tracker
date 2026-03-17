@@ -862,10 +862,23 @@ export default function App() {
                   onKeyDown={e => e.key === "Enter" && addTicker()} placeholder="Ticker (e.g. NVDA)"
                   style={{ flex: 1, background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 6,
                     padding: "12px 16px", color: "#fff", fontFamily: "'Inter', sans-serif", fontSize: 15, outline: "none" }} />
-                <input value={newSector} onChange={e => setNewSector(e.target.value)}
-                  placeholder="Sector (optional)"
+                <select value={newSector} onChange={e => setNewSector(e.target.value)}
                   style={{ flex: 1, background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 6,
-                    padding: "12px 16px", color: "#fff", fontFamily: "'Inter', sans-serif", fontSize: 15, outline: "none" }} />
+                    padding: "12px 16px", color: newSector ? "#fff" : "#888", fontFamily: "'Inter', sans-serif",
+                    fontSize: 15, outline: "none", cursor: "pointer" }}>
+                  <option value="">Sector (optional)</option>
+                  <option value="Energy">Energy</option>
+                  <option value="Technology">Technology</option>
+                  <option value="Healthcare">Healthcare</option>
+                  <option value="Financials">Financials</option>
+                  <option value="Consumer Discretionary">Consumer Discretionary</option>
+                  <option value="Consumer Staples">Consumer Staples</option>
+                  <option value="Industrials">Industrials</option>
+                  <option value="Materials">Materials</option>
+                  <option value="Utilities">Utilities</option>
+                  <option value="Real Estate">Real Estate</option>
+                  <option value="Communication Services">Communication Services</option>
+                </select>
                 <button onClick={addTicker} style={btnStyle("#00d4aa", "#000")}>Add</button>
               </div>
             </div>
