@@ -1,3 +1,4 @@
+# Last updated: 2026-03-17 23:55 ET
 """
 Data Clients — Finviz Elite + Tradier Options
 """
@@ -38,6 +39,9 @@ class FinvizClient:
     def get_ticker_data(self, symbols: list) -> dict:
         """
         Fetch screener data for a list of tickers.
+        Uses two Finviz views merged together:
+          v=111 (overview): price, market cap, volume, sector, rel vol
+          v=170 (technical): SMA20/50/200, perf fields, RSI, 52W high/low
         Returns dict keyed by ticker with standardized fields.
         """
         if not self.token:
@@ -46,72 +50,101 @@ class FinvizClient:
         if not symbols:
             return {}
 
-        # Finviz accepts up to ~500 tickers in one request
         tickers_str = ",".join(symbols)
-        # v=152 is Finviz's "Performance" view which includes all perf columns
-        # No &c= parameter — use the full default view to get correct column names
-        url = (
-            f"{FINVIZ_EXPORT_URL}"
-            f"?v=152"
-            f"&t={tickers_str}"
-            f"&auth={self.token}"
-        )
+        base_url = f"{FINVIZ_EXPORT_URL}?t={tickers_str}&auth={self.token}"
 
+        result = {}
+
+        # --- Request 1: v=111 overview (price, vol, sector, market cap) ---
         try:
-            resp = requests.get(url, timeout=15)
-            if resp.status_code == 401:
-                print("  Finviz: 401 Unauthorized — check FINVIZ_API_TOKEN")
+            resp1 = requests.get(f"{base_url}&v=111", timeout=15)
+            if resp1.status_code in (401, 403):
+                print(f"  Finviz: {resp1.status_code} — check FINVIZ_API_TOKEN")
                 return {}
-            if resp.status_code == 403:
-                print("  Finviz: 403 Forbidden — token may be expired or plan doesn't include API")
-                return {}
-            resp.raise_for_status()
-
-            df = pd.read_csv(StringIO(resp.text))
-            # Log ALL column names so we can verify mappings
-            print(f"  Finviz v=152 ALL columns: {list(df.columns)}")
-            result = {}
-            for _, row in df.iterrows():
+            resp1.raise_for_status()
+            df1 = pd.read_csv(StringIO(resp1.text))
+            print(f"  Finviz v=111 columns: {list(df1.columns)}")
+            for _, row in df1.iterrows():
                 ticker = str(row.get("Ticker", "")).strip()
                 if not ticker:
                     continue
                 result[ticker] = {
                     "price":               self._float(row.get("Price", 0)),
-                    "sma20":               self._float(row.get("SMA20", 0)),
-                    "sma50":               self._float(row.get("SMA50", 0)),
-                    "sma200":              self._float(row.get("SMA200", 0)),
                     "volume":              self._float(row.get("Volume", 0)),
                     "avg_volume":          self._float(row.get("Avg Volume", 0)),
                     "relative_volume":     self._float(row.get("Rel Volume", 0)),
-                    # v=152 performance view uses these header names:
-                    "perf_week":           self._pct(row.get("Perf Week", row.get("1 Week", "0%"))),
-                    "perf_month":          self._pct(row.get("Perf Month", row.get("1 Month", "0%"))),
-                    "perf_quarter":        self._pct(row.get("Perf Quart", row.get("3 Month", row.get("Perf Quarter", "0%")))),
-                    "perf_half":           self._pct(row.get("Perf Half", row.get("6 Month", row.get("Perf Half Y", "0%")))),
-                    "perf_year":           self._pct(row.get("Perf Year", row.get("52-Week", row.get("1 Year", "0%")))),
-                    "perf_ytd":            self._pct(row.get("Perf YTD", row.get("YTD", row.get("Perf Year", "0%")))),
-                    "rsi":                 self._float(row.get("RSI (14)", row.get("RSI", 50))),
-                    "institutional_own":   self._pct(row.get("Inst Own", "0%")),
-                    "institutional_trans": self._pct(row.get("Inst Trans", "0%")),
-                    "institutional_trans_pct": self._pct(row.get("Inst Trans", "0%")),
-                    "short_float":         self._pct(row.get("Short Float", "0%")),
-                    "short_ratio":         self._float(row.get("Short Ratio", 0)),
-                    "insider_own":         self._pct(row.get("Insider Own", "0%")),
                     "market_cap":          self._float(row.get("Market Cap", 0)),
                     "sector":              str(row.get("Sector", "")),
                     "industry":            str(row.get("Industry", "")),
-                    "52w_high":            self._float(row.get("52W High", 0)),
-                    "52w_low":             self._float(row.get("52W Low", 0)),
+                    "rsi":                 self._float(row.get("RSI (14)", row.get("RSI", 50))),
+                    # defaults — will be overwritten by v=170
+                    "sma20": 0, "sma50": 0, "sma200": 0,
+                    "perf_week": 0, "perf_month": 0, "perf_quarter": 0,
+                    "perf_half": 0, "perf_year": 0, "perf_ytd": 0,
+                    "52w_high": 0, "52w_low": 0,
+                    "institutional_own": 0, "institutional_trans": 0,
+                    "institutional_trans_pct": 0, "short_float": 0,
+                    "short_ratio": 0, "insider_own": 0,
                 }
-                # Log actual column names on first ticker so we can verify mappings
-                if len(result) == 1:
-                    print(f"  Finviz actual columns: {[c for c in row.index.tolist() if 'Perf' in c or 'SMA' in c or 'Price' in c or 'Volume' in c]}")
-            print(f"  Finviz: fetched data for {len(result)} tickers")
-            return result
-
         except Exception as e:
-            print(f"  Finviz error: {e}")
+            print(f"  Finviz v=111 error: {e}")
             return {}
+
+        # --- Request 2: v=170 technical (SMA, perf, 52W) ---
+        try:
+            resp2 = requests.get(f"{base_url}&v=170", timeout=15)
+            resp2.raise_for_status()
+            df2 = pd.read_csv(StringIO(resp2.text))
+            print(f"  Finviz v=170 columns: {list(df2.columns)}")
+            for _, row in df2.iterrows():
+                ticker = str(row.get("Ticker", "")).strip()
+                if not ticker or ticker not in result:
+                    continue
+                result[ticker].update({
+                    "sma20":        self._float(row.get("SMA20", 0)),
+                    "sma50":        self._float(row.get("SMA50", 0)),
+                    "sma200":       self._float(row.get("SMA200", 0)),
+                    "perf_week":    self._pct(row.get("Perf Week", "0%")),
+                    "perf_month":   self._pct(row.get("Perf Month", "0%")),
+                    "perf_quarter": self._pct(row.get("Perf Quart", "0%")),
+                    "perf_half":    self._pct(row.get("Perf Half", "0%")),
+                    "perf_year":    self._pct(row.get("Perf Year", "0%")),
+                    "perf_ytd":     self._pct(row.get("Perf YTD", row.get("Perf Year", "0%"))),
+                    "52w_high":     self._float(row.get("52W High", 0)),
+                    "52w_low":      self._float(row.get("52W Low", 0)),
+                    "rsi":          self._float(row.get("RSI (14)", row.get("RSI", result[ticker].get("rsi", 50)))),
+                })
+        except Exception as e:
+            print(f"  Finviz v=170 error: {e}")
+            # Don't return empty — v=111 data is still useful
+
+        # --- Request 3: v=161 ownership (inst trans, short float) ---
+        try:
+            resp3 = requests.get(f"{base_url}&v=161", timeout=15)
+            resp3.raise_for_status()
+            df3 = pd.read_csv(StringIO(resp3.text))
+            for _, row in df3.iterrows():
+                ticker = str(row.get("Ticker", "")).strip()
+                if not ticker or ticker not in result:
+                    continue
+                result[ticker].update({
+                    "institutional_own":       self._pct(row.get("Inst Own", "0%")),
+                    "institutional_trans":     self._pct(row.get("Inst Trans", "0%")),
+                    "institutional_trans_pct": self._pct(row.get("Inst Trans", "0%")),
+                    "short_float":             self._pct(row.get("Short Float", "0%")),
+                    "short_ratio":             self._float(row.get("Short Ratio", 0)),
+                    "insider_own":             self._pct(row.get("Insider Own", "0%")),
+                })
+        except Exception as e:
+            print(f"  Finviz v=161 error: {e}")
+
+        print(f"  Finviz: fetched data for {len(result)} tickers")
+        # Log sample for first ticker
+        if result:
+            sample = next(iter(result.values()))
+            print(f"  Finviz sample: price={sample.get('price')} sma50={sample.get('sma50')} perf_q={sample.get('perf_quarter')} perf_h={sample.get('perf_half')}")
+        return result
+
 
     def get_sector_etf_data(self, etf_symbols: list) -> dict:
         """Fetch ETF-level data for sector scoring."""
