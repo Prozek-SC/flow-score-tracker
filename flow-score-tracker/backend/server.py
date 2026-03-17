@@ -143,16 +143,28 @@ def debug():
         from data_clients import FinvizClient
         fv = FinvizClient()
         if fv.token:
+            import pandas as pd
+            from io import StringIO
+            import requests as _req
+            tickers_str = "SPY,TRGP"
+            url = f"https://elite.finviz.com/export.ashx?v=152&t={tickers_str}&auth={fv.token}"
+            raw_resp = _req.get(url, timeout=15)
+            raw_df = pd.read_csv(StringIO(raw_resp.text)) if raw_resp.status_code == 200 else None
+            raw_columns = list(raw_df.columns) if raw_df is not None else []
+            raw_first_row = raw_df.iloc[0].to_dict() if raw_df is not None and len(raw_df) > 0 else {}
+
             data = fv.get_ticker_data(["SPY", "TRGP"])
             spy = data.get("SPY", {})
             trgp = data.get("TRGP", {})
             report["finviz"] = {
                 "status": "ok",
                 "token_present": True,
-                "columns_returned": list(spy.keys()) if spy else [],
-                "SPY": {k: v for k, v in spy.items() if k in
+                "raw_csv_columns": raw_columns,
+                "raw_first_row_sample": {k: v for k, v in raw_first_row.items()
+                                          if any(x in k for x in ["Perf", "SMA", "Price", "Volume", "Sector"])},
+                "parsed_SPY": {k: v for k, v in spy.items() if k in
                         ["price", "sma200", "perf_quarter", "perf_month", "perf_half", "perf_year", "perf_week"]},
-                "TRGP": {k: v for k, v in trgp.items() if k in
+                "parsed_TRGP": {k: v for k, v in trgp.items() if k in
                          ["price", "sma20", "sma50", "sma200", "perf_quarter", "perf_month",
                           "perf_half", "perf_year", "perf_week", "relative_volume", "sector"]},
             }
