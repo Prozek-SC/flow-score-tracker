@@ -48,10 +48,19 @@ class FinvizClient:
 
         # Finviz accepts up to ~500 tickers in one request
         tickers_str = ",".join(symbols)
+        # Finviz column IDs for the fields we need:
+        # 1=Ticker, 2=Company, 6=Market Cap, 14=Price, 25=Change, 26=Volume,
+        # 27=Rel Volume, 28=Avg Volume, 29=P/E, 56=Perf Week, 57=Perf Month,
+        # 58=Perf Quart, 59=Perf Half, 60=Perf Year, 67=RSI,
+        # 68=SMA20, 69=SMA50, 70=SMA200, 73=52W High, 74=52W Low,
+        # 82=Inst Own, 83=Inst Trans, 84=Short Float, 85=Short Ratio,
+        # 86=Insider Own, 3=Sector, 4=Industry
+        columns = "0,1,2,3,4,6,14,25,26,27,28,56,57,58,59,60,67,68,69,70,73,74,82,83,84,85,86"
         url = (
             f"{FINVIZ_EXPORT_URL}"
-            f"?v=111"
+            f"?v=152"
             f"&t={tickers_str}"
+            f"&c={columns}"
             f"&auth={self.token}"
         )
 
@@ -66,6 +75,7 @@ class FinvizClient:
             resp.raise_for_status()
 
             df = pd.read_csv(StringIO(resp.text))
+            print(f"  Finviz columns: {list(df.columns)}")
             result = {}
             for _, row in df.iterrows():
                 ticker = str(row.get("Ticker", "")).strip()
@@ -81,12 +91,14 @@ class FinvizClient:
                     "relative_volume":     self._float(row.get("Rel Volume", 0)),
                     "perf_week":           self._pct(row.get("Perf Week", "0%")),
                     "perf_month":          self._pct(row.get("Perf Month", "0%")),
-                    "perf_quarter":        self._pct(row.get("Perf Quart", "0%")),
-                    "perf_half":           self._pct(row.get("Perf Half", "0%")),
+                    "perf_quarter":        self._pct(row.get("Perf Quart", row.get("Perf Quarter", "0%"))),
+                    "perf_half":           self._pct(row.get("Perf Half", row.get("Perf Half Y", "0%"))),
                     "perf_year":           self._pct(row.get("Perf Year", "0%")),
-                    "rsi":                 self._float(row.get("RSI (14)", 50)),
+                    "perf_ytd":            self._pct(row.get("Perf YTD", row.get("Perf Year", "0%"))),
+                    "rsi":                 self._float(row.get("RSI (14)", row.get("RSI", 50))),
                     "institutional_own":   self._pct(row.get("Inst Own", "0%")),
                     "institutional_trans": self._pct(row.get("Inst Trans", "0%")),
+                    "institutional_trans_pct": self._pct(row.get("Inst Trans", "0%")),
                     "short_float":         self._pct(row.get("Short Float", "0%")),
                     "short_ratio":         self._float(row.get("Short Ratio", 0)),
                     "insider_own":         self._pct(row.get("Insider Own", "0%")),
