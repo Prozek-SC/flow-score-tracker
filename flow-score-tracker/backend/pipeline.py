@@ -160,6 +160,9 @@ def score_tickers(ticker_sector_list: list) -> list:
     # SPY 63-day perf from Finviz perf_quarter field
     spy_fv = fv_batch.get("SPY", {})
     spy_perf_63d = spy_fv.get("perf_quarter", 0)
+    spy_price = spy_fv.get("price", 0)
+    spy_ma200 = spy_fv.get("sma200", 0)
+    spy_above_200ma = bool(spy_price > spy_ma200) if spy_ma200 else True
 
     results = []
     for item in ticker_sector_list:
@@ -184,21 +187,23 @@ def score_tickers(ticker_sector_list: list) -> list:
 
             sector_rank = get_sector_rank_for_ticker(sector, sector_scores)
             sector_ytd = get_sector_perf(sector, sector_scores)
-            # Use sector ETF perf_quarter as flow proxy (positive = inflows)
             sector_etf_flow = 0
+            sector_perf_63d = 0
             for s in sector_scores:
                 if sector.lower() in s["sector"].lower():
-                    # Convert ETF 3M perf to a flow proxy: +10% perf ≈ $500M inflows
                     etf_perf_3m = s.get("ytd_perf", 0)
-                    sector_etf_flow = etf_perf_3m * 50  # scale: 10% → $500M
+                    sector_etf_flow = etf_perf_3m * 50  # scale: 10% → $500M proxy
+                    sector_perf_63d = etf_perf_3m
                     break
 
-            l1 = score_capital_flow_level1(equity_weekly, equity_avg)
+            l1 = score_capital_flow_level1(equity_weekly, equity_avg, spy_above_200ma)
             l2 = score_capital_flow_level2(sector_ytd, sector_etf_flow, sector_rank)
-            l3 = score_capital_flow_level3(bars, fv, merged_flow)
+            l3 = score_capital_flow_level3(bars, fv, merged_flow,
+                                            spy_perf_63d=spy_perf_63d,
+                                            sector_perf_63d=sector_perf_63d)
             capital_flow = score_capital_flow_pillar(l1, l2, l3)
             trend = score_trend_pillar(price, ma20, ma50, ma200, bars)
-            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_ytd)
+            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_perf_63d)
 
             result = calculate_flow_score(capital_flow, trend, momentum)
             result["ticker"] = ticker
@@ -254,7 +259,11 @@ def run_weekly_flow_score():
         fv_batch = {}
 
     # --- SPY 63-day perf from Finviz perf_quarter ---
-    spy_perf_63d = fv_batch.get("SPY", {}).get("perf_quarter", 0)
+    spy_fv2 = fv_batch.get("SPY", {})
+    spy_perf_63d = spy_fv2.get("perf_quarter", 0)
+    spy_price2 = spy_fv2.get("price", 0)
+    spy_ma200_2 = spy_fv2.get("sma200", 0)
+    spy_above_200ma = bool(spy_price2 > spy_ma200_2) if spy_ma200_2 else True
 
     results = []
     for w in watchlist:
@@ -285,23 +294,27 @@ def run_weekly_flow_score():
             sector_rank = get_sector_rank_for_ticker(sector, sector_scores)
             sector_ytd = get_sector_perf(sector, sector_scores)
             sector_etf_flow = 0
+            sector_perf_63d = 0
             for s in sector_scores:
                 if sector.lower() in s["sector"].lower():
                     etf_perf_3m = s.get("ytd_perf", 0)
                     sector_etf_flow = etf_perf_3m * 50  # scale: 10% perf → $500M proxy
+                    sector_perf_63d = etf_perf_3m
                     break
 
             # PILLAR 1: Capital Flow
-            l1 = score_capital_flow_level1(equity_weekly, equity_avg)
+            l1 = score_capital_flow_level1(equity_weekly, equity_avg, spy_above_200ma)
             l2 = score_capital_flow_level2(sector_ytd, sector_etf_flow, sector_rank)
-            l3 = score_capital_flow_level3(bars, fv, merged_flow)
+            l3 = score_capital_flow_level3(bars, fv, merged_flow,
+                                            spy_perf_63d=spy_perf_63d,
+                                            sector_perf_63d=sector_perf_63d)
             capital_flow = score_capital_flow_pillar(l1, l2, l3)
 
             # PILLAR 2: Trend
             trend = score_trend_pillar(price, ma20, ma50, ma200, bars)
 
             # PILLAR 3: Momentum
-            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_ytd)
+            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_perf_63d)
 
             # COMPOSITE
             result = calculate_flow_score(capital_flow, trend, momentum)
