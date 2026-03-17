@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 00:10 ET
+# Last updated: 2026-03-18 00:20 ET
 """
 Data Clients — Finviz Elite + Tradier Options
 """
@@ -95,44 +95,61 @@ class FinvizClient:
             resp2 = requests.get(f"{base_url}&v=141", timeout=15)
             resp2.raise_for_status()
             df2 = pd.read_csv(StringIO(resp2.text))
-            print(f"  Finviz v=141 columns: {list(df2.columns)}")
             for _, row in df2.iterrows():
                 ticker = str(row.get("Ticker", "")).strip()
                 if not ticker or ticker not in result:
                     continue
                 result[ticker].update({
-                    "perf_week":       self._pct(row.get("Perf Week", "0%")),
-                    "perf_month":      self._pct(row.get("Perf Month", "0%")),
-                    "perf_quarter":    self._pct(row.get("Perf Quart", "0%")),
-                    "perf_half":       self._pct(row.get("Perf Half", "0%")),
-                    "perf_year":       self._pct(row.get("Perf Year", "0%")),
-                    "perf_ytd":        self._pct(row.get("Perf YTD", row.get("Perf Year", "0%"))),
-                    "relative_volume": self._float(row.get("Rel Volume", 0)),
-                    "avg_volume":      self._float(row.get("Avg Volume", 0)),
+                    "perf_week":       self._pct(row.get("Performance (Week)", "0%")),
+                    "perf_month":      self._pct(row.get("Performance (Month)", "0%")),
+                    "perf_quarter":    self._pct(row.get("Performance (Quarter)", "0%")),
+                    "perf_half":       self._pct(row.get("Performance (Half Year)", "0%")),
+                    "perf_year":       self._pct(row.get("Performance (Year)", "0%")),
+                    "perf_ytd":        self._pct(row.get("Performance (YTD)", "0%")),
+                    "relative_volume": self._float(row.get("Relative Volume", 0)),
+                    "avg_volume":      self._float(row.get("Average Volume", 0)),
                 })
         except Exception as e:
             print(f"  Finviz v=141 error: {e}")
 
-        # --- Request 3: v=151 Technical (SMA20/50/200, RSI, 52W High/Low) ---
-        try:
-            resp3 = requests.get(f"{base_url}&v=151", timeout=15)
-            resp3.raise_for_status()
-            df3 = pd.read_csv(StringIO(resp3.text))
-            print(f"  Finviz v=151 columns: {list(df3.columns)}")
-            for _, row in df3.iterrows():
-                ticker = str(row.get("Ticker", "")).strip()
-                if not ticker or ticker not in result:
-                    continue
-                result[ticker].update({
-                    "sma20":    self._float(row.get("SMA20", 0)),
-                    "sma50":    self._float(row.get("SMA50", 0)),
-                    "sma200":   self._float(row.get("SMA200", 0)),
-                    "rsi":      self._float(row.get("RSI (14)", row.get("RSI", 50))),
-                    "52w_high": self._float(row.get("52W High", 0)),
-                    "52w_low":  self._float(row.get("52W Low", 0)),
-                })
-        except Exception as e:
-            print(f"  Finviz v=151 error: {e}")
+        # --- Request 3: v=150 Technical (SMA20/50/200, RSI, 52W High/Low) ---
+        # Try multiple views to find the one with SMA columns
+        sma_found = False
+        for v_num in ["150", "152", "153", "154", "155"]:
+            try:
+                resp3 = requests.get(f"{base_url}&v={v_num}", timeout=15)
+                resp3.raise_for_status()
+                df3 = pd.read_csv(StringIO(resp3.text))
+                cols = list(df3.columns)
+                print(f"  Finviz v={v_num} columns: {cols}")
+                # Check if this view has SMA data
+                sma_cols = [c for c in cols if "SMA" in c or "Moving Average" in c or "200-Day" in c]
+                if sma_cols:
+                    print(f"  Found SMA columns in v={v_num}: {sma_cols}")
+                    sma_col_20 = next((c for c in cols if "20" in c and ("SMA" in c or "Moving" in c)), None)
+                    sma_col_50 = next((c for c in cols if "50" in c and ("SMA" in c or "Moving" in c)), None)
+                    sma_col_200 = next((c for c in cols if "200" in c and ("SMA" in c or "Moving" in c)), None)
+                    rsi_col = next((c for c in cols if "RSI" in c), None)
+                    high_col = next((c for c in cols if "52" in c and "High" in c), None)
+                    low_col = next((c for c in cols if "52" in c and "Low" in c), None)
+                    for _, row in df3.iterrows():
+                        ticker = str(row.get("Ticker", "")).strip()
+                        if not ticker or ticker not in result:
+                            continue
+                        result[ticker].update({
+                            "sma20":    self._float(row.get(sma_col_20, 0)) if sma_col_20 else 0,
+                            "sma50":    self._float(row.get(sma_col_50, 0)) if sma_col_50 else 0,
+                            "sma200":   self._float(row.get(sma_col_200, 0)) if sma_col_200 else 0,
+                            "rsi":      self._float(row.get(rsi_col, 50)) if rsi_col else 50,
+                            "52w_high": self._float(row.get(high_col, 0)) if high_col else 0,
+                            "52w_low":  self._float(row.get(low_col, 0)) if low_col else 0,
+                        })
+                    sma_found = True
+                    break
+            except Exception as e:
+                print(f"  Finviz v={v_num} error: {e}")
+        if not sma_found:
+            print("  WARNING: Could not find SMA data in any Finviz view")
 
         # --- Request 4: v=131 Ownership (Inst Trans, Short Float) ---
         try:
