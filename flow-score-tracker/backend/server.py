@@ -1,3 +1,4 @@
+# Last updated: 2026-03-18 00:10 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -147,11 +148,13 @@ def debug():
             from io import StringIO
             import requests as _req
             tickers_str = "SPY,TRGP"
-            url = f"https://elite.finviz.com/export.ashx?v=152&t={tickers_str}&auth={fv.token}"
-            raw_resp = _req.get(url, timeout=15)
-            raw_df = pd.read_csv(StringIO(raw_resp.text)) if raw_resp.status_code == 200 else None
-            raw_columns = list(raw_df.columns) if raw_df is not None else []
-            raw_first_row = raw_df.iloc[0].to_dict() if raw_df is not None and len(raw_df) > 0 else {}
+            # Check both views we actually use
+            url141 = f"https://elite.finviz.com/export.ashx?v=141&t={tickers_str}&auth={fv.token}"
+            url151 = f"https://elite.finviz.com/export.ashx?v=151&t={tickers_str}&auth={fv.token}"
+            r141 = _req.get(url141, timeout=15)
+            r151 = _req.get(url151, timeout=15)
+            df141 = pd.read_csv(StringIO(r141.text)) if r141.status_code == 200 else None
+            df151 = pd.read_csv(StringIO(r151.text)) if r151.status_code == 200 else None
 
             data = fv.get_ticker_data(["SPY", "TRGP"])
             spy = data.get("SPY", {})
@@ -159,9 +162,8 @@ def debug():
             report["finviz"] = {
                 "status": "ok",
                 "token_present": True,
-                "raw_csv_columns": raw_columns,
-                "raw_first_row_sample": {k: v for k, v in raw_first_row.items()
-                                          if any(x in k for x in ["Perf", "SMA", "Price", "Volume", "Sector"])},
+                "v141_columns": list(df141.columns) if df141 is not None else [],
+                "v151_columns": list(df151.columns) if df151 is not None else [],
                 "parsed_SPY": {k: v for k, v in spy.items() if k in
                         ["price", "sma200", "perf_quarter", "perf_month", "perf_half", "perf_year", "perf_week"]},
                 "parsed_TRGP": {k: v for k, v in trgp.items() if k in
