@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 00:20 ET
+# Last updated: 2026-03-18 00:30 ET
 """
 Data Clients — Finviz Elite + Tradier Options
 """
@@ -112,44 +112,47 @@ class FinvizClient:
         except Exception as e:
             print(f"  Finviz v=141 error: {e}")
 
-        # --- Request 3: v=150 Technical (SMA20/50/200, RSI, 52W High/Low) ---
-        # Try multiple views to find the one with SMA columns
-        sma_found = False
-        for v_num in ["150", "152", "153", "154", "155"]:
+        # --- Request 3: SMA data via finvizfinance library ---
+        # The Finviz export API doesn't expose SMA columns in any view.
+        # finvizfinance scrapes individual ticker pages which do have SMA data.
+        # We batch this for small lists (scoring uses 10-30 tickers at a time).
+        if len(symbols) <= 50:
             try:
-                resp3 = requests.get(f"{base_url}&v={v_num}", timeout=15)
-                resp3.raise_for_status()
-                df3 = pd.read_csv(StringIO(resp3.text))
-                cols = list(df3.columns)
-                print(f"  Finviz v={v_num} columns: {cols}")
-                # Check if this view has SMA data
-                sma_cols = [c for c in cols if "SMA" in c or "Moving Average" in c or "200-Day" in c]
-                if sma_cols:
-                    print(f"  Found SMA columns in v={v_num}: {sma_cols}")
-                    sma_col_20 = next((c for c in cols if "20" in c and ("SMA" in c or "Moving" in c)), None)
-                    sma_col_50 = next((c for c in cols if "50" in c and ("SMA" in c or "Moving" in c)), None)
-                    sma_col_200 = next((c for c in cols if "200" in c and ("SMA" in c or "Moving" in c)), None)
-                    rsi_col = next((c for c in cols if "RSI" in c), None)
-                    high_col = next((c for c in cols if "52" in c and "High" in c), None)
-                    low_col = next((c for c in cols if "52" in c and "Low" in c), None)
-                    for _, row in df3.iterrows():
-                        ticker = str(row.get("Ticker", "")).strip()
-                        if not ticker or ticker not in result:
-                            continue
+                from finvizfinance.quote import finvizfinance as fvf
+                import time
+                for ticker in list(result.keys()):
+                    try:
+                        stock = fvf(ticker)
+                        fundament = stock.ticker_fundaments()
+                        # fundament keys include: 'SMA20', 'SMA50', 'SMA200', 'RSI (14)', etc.
+                        sma20_raw  = fundament.get("SMA20", "0%")
+                        sma50_raw  = fundament.get("SMA50", "0%")
+                        sma200_raw = fundament.get("SMA200", "0%")
+                        price = result[ticker].get("price", 0)
+                        # Finviz reports SMA as % distance from price e.g. "-5.23%"
+                        # Convert: sma = price / (1 + pct/100)
+                        def pct_to_sma(pct_str, price):
+                            try:
+                                pct = float(str(pct_str).replace("%","").strip()) / 100
+                                return round(price / (1 + pct), 2) if price > 0 and (1 + pct) != 0 else 0
+                            except:
+                                return 0
                         result[ticker].update({
-                            "sma20":    self._float(row.get(sma_col_20, 0)) if sma_col_20 else 0,
-                            "sma50":    self._float(row.get(sma_col_50, 0)) if sma_col_50 else 0,
-                            "sma200":   self._float(row.get(sma_col_200, 0)) if sma_col_200 else 0,
-                            "rsi":      self._float(row.get(rsi_col, 50)) if rsi_col else 50,
-                            "52w_high": self._float(row.get(high_col, 0)) if high_col else 0,
-                            "52w_low":  self._float(row.get(low_col, 0)) if low_col else 0,
+                            "sma20":  pct_to_sma(sma20_raw, price),
+                            "sma50":  pct_to_sma(sma50_raw, price),
+                            "sma200": pct_to_sma(sma200_raw, price),
+                            "rsi":    self._float(fundament.get("RSI (14)", 50)),
+                            "52w_high": self._float(str(fundament.get("52W High", "0")).replace(",","")),
+                            "52w_low":  self._float(str(fundament.get("52W Low", "0")).replace(",","")),
                         })
-                    sma_found = True
-                    break
-            except Exception as e:
-                print(f"  Finviz v={v_num} error: {e}")
-        if not sma_found:
-            print("  WARNING: Could not find SMA data in any Finviz view")
+                        time.sleep(0.1)  # be polite to Finviz
+                    except Exception as e:
+                        print(f"  finvizfinance error for {ticker}: {e}")
+                print(f"  finvizfinance: SMA data fetched for {len(result)} tickers")
+            except ImportError:
+                print("  finvizfinance not installed — SMA data unavailable")
+        else:
+            print(f"  Skipping SMA fetch — too many tickers ({len(symbols)})")
 
         # --- Request 4: v=131 Ownership (Inst Trans, Short Float) ---
         try:
@@ -161,12 +164,12 @@ class FinvizClient:
                 if not ticker or ticker not in result:
                     continue
                 result[ticker].update({
-                    "institutional_own":       self._pct(row.get("Inst Own", "0%")),
-                    "institutional_trans":     self._pct(row.get("Inst Trans", "0%")),
-                    "institutional_trans_pct": self._pct(row.get("Inst Trans", "0%")),
+                    "institutional_own":       self._pct(row.get("Inst Own", row.get("Institutional Ownership", "0%"))),
+                    "institutional_trans":     self._pct(row.get("Inst Trans", row.get("Institutional Transactions", "0%"))),
+                    "institutional_trans_pct": self._pct(row.get("Inst Trans", row.get("Institutional Transactions", "0%"))),
                     "short_float":             self._pct(row.get("Short Float", "0%")),
                     "short_ratio":             self._float(row.get("Short Ratio", 0)),
-                    "insider_own":             self._pct(row.get("Insider Own", "0%")),
+                    "insider_own":             self._pct(row.get("Insider Own", row.get("Insider Ownership", "0%"))),
                 })
         except Exception as e:
             print(f"  Finviz v=131 error: {e}")
