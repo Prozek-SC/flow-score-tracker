@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 12:35 ET
+# Last updated: 2026-03-18 13:00 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -476,6 +476,17 @@ def latest_scores():
 
     # Sort by flow_score descending
     scores = sorted(seen.values(), key=lambda x: x.get("flow_score", 0) or 0, reverse=True)
+    # Sanitize NaN/Infinity values which break JSON serialization in browsers
+    import math
+    def sanitize(obj):
+        if isinstance(obj, dict):
+            return {k: sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [sanitize(v) for v in obj]
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
+        return obj
+    scores = sanitize(scores)
     return jsonify(scores)
 
 @app.route("/api/scores/history/<ticker>")
