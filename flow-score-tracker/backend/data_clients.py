@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 00:30 ET
+# Last updated: 2026-03-18 00:45 ET
 """
 Data Clients — Finviz Elite + Tradier Options
 """
@@ -115,7 +115,6 @@ class FinvizClient:
         # --- Request 3: SMA data via finvizfinance library ---
         # The Finviz export API doesn't expose SMA columns in any view.
         # finvizfinance scrapes individual ticker pages which do have SMA data.
-        # We batch this for small lists (scoring uses 10-30 tickers at a time).
         if len(symbols) <= 50:
             try:
                 from finvizfinance.quote import finvizfinance as fvf
@@ -123,13 +122,13 @@ class FinvizClient:
                 for ticker in list(result.keys()):
                     try:
                         stock = fvf(ticker)
-                        fundament = stock.ticker_fundaments()
-                        # fundament keys include: 'SMA20', 'SMA50', 'SMA200', 'RSI (14)', etc.
-                        sma20_raw  = fundament.get("SMA20", "0%")
-                        sma50_raw  = fundament.get("SMA50", "0%")
-                        sma200_raw = fundament.get("SMA200", "0%")
+                        fundament = stock.ticker_fundament()  # note: no 's'
+                        if len(result) <= 3:  # log first few for debugging
+                            sma_keys = {k: v for k, v in fundament.items()
+                                       if any(x in k for x in ["SMA", "200", "50-D", "20-D", "RSI", "52W"])}
+                            print(f"  finvizfinance {ticker} SMA keys: {sma_keys}")
                         price = result[ticker].get("price", 0)
-                        # Finviz reports SMA as % distance from price e.g. "-5.23%"
+                        # Finviz reports SMA as % distance: e.g. "-5.23%"
                         # Convert: sma = price / (1 + pct/100)
                         def pct_to_sma(pct_str, price):
                             try:
@@ -138,21 +137,21 @@ class FinvizClient:
                             except:
                                 return 0
                         result[ticker].update({
-                            "sma20":  pct_to_sma(sma20_raw, price),
-                            "sma50":  pct_to_sma(sma50_raw, price),
-                            "sma200": pct_to_sma(sma200_raw, price),
-                            "rsi":    self._float(fundament.get("RSI (14)", 50)),
+                            "sma20":    pct_to_sma(fundament.get("SMA20", "0%"), price),
+                            "sma50":    pct_to_sma(fundament.get("SMA50", "0%"), price),
+                            "sma200":   pct_to_sma(fundament.get("SMA200", "0%"), price),
+                            "rsi":      float(str(fundament.get("RSI (14)", 50)).replace("%","") or 50),
                             "52w_high": self._float(str(fundament.get("52W High", "0")).replace(",","")),
                             "52w_low":  self._float(str(fundament.get("52W Low", "0")).replace(",","")),
                         })
-                        time.sleep(0.1)  # be polite to Finviz
+                        time.sleep(0.15)
                     except Exception as e:
                         print(f"  finvizfinance error for {ticker}: {e}")
-                print(f"  finvizfinance: SMA data fetched for {len(result)} tickers")
+                print(f"  finvizfinance: SMA fetch complete. Sample TRGP sma50={result.get('TRGP', {}).get('sma50', 'N/A')}")
             except ImportError:
                 print("  finvizfinance not installed — SMA data unavailable")
         else:
-            print(f"  Skipping SMA fetch — too many tickers ({len(symbols)})")
+            print(f"  Skipping SMA fetch — too many tickers ({len(symbols)}), using price as MA proxy")
 
         # --- Request 4: v=131 Ownership (Inst Trans, Short Float) ---
         try:
