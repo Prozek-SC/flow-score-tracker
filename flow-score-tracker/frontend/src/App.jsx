@@ -1,3 +1,4 @@
+// Last updated: 2026-03-18 12:35 ET
 import { useState, useEffect, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -616,9 +617,9 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/api/scores/latest`);
       const data = await res.json();
-      setScores(data);
+      setScores(Array.isArray(data) ? data : []);
       setLastUpdated(new Date());
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e); setScores([]); }
     finally { setLoading(false); }
   }, []);
 
