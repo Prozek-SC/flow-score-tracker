@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 12:20 ET
+# Last updated: 2026-03-18 12:35 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -73,7 +73,7 @@ def scanner_job():
         for sector_data in top_sectors:
             sname = sector_data["sector"]
             stocks = sector_stocks.get(sname, [])
-            top_in_sector = sorted(stocks, key=lambda s: s.get("rs_vs_etf", 0), reverse=True)[:10]
+            top_in_sector = sorted(stocks, key=lambda s: s.get("rs_vs_etf", 0), reverse=True)[:25]
             for s in top_in_sector:
                 top10.append({"ticker": s["ticker"], "sector": sname, "rs": s.get("rs_vs_etf", 0)})
 
@@ -82,7 +82,7 @@ def scanner_job():
             top10.append({"ticker": s["ticker"], "sector": s.get("sector", ""), "rs": s.get("perf_3m", 0)})
 
         if top10:
-            print(f"  Scoring {len(top10)} stocks (top 10/sector): {[t['ticker'] for t in top10]}")
+            print(f"  Scoring {len(top10)} stocks (top 25/sector): {[t['ticker'] for t in top10]}")
             scored = score_tickers(top10)
             # Merge scores back into results for the email
             score_map = {r["ticker"]: r for r in scored}
@@ -692,7 +692,7 @@ def trigger_scanner():
             for sector_data in top_sectors:
                 sname = sector_data["sector"]
                 stocks = sector_stocks.get(sname, [])
-                top_in_sector = sorted(stocks, key=lambda s: s.get("rs_vs_etf", 0), reverse=True)[:10]
+                top_in_sector = sorted(stocks, key=lambda s: s.get("rs_vs_etf", 0), reverse=True)[:25]
                 for s in top_in_sector:
                     top10.append({"ticker": s["ticker"], "sector": sname, "rs": s.get("rs_vs_etf", 0)})
 
@@ -701,7 +701,7 @@ def trigger_scanner():
                 top10.append({"ticker": s["ticker"], "sector": s.get("sector", ""), "rs": s.get("perf_3m", 0)})
 
             if top10:
-                print(f"  Scoring {len(top10)} stocks (top 10/sector + BBS): {[t['ticker'] for t in top10]}")
+                print(f"  Scoring {len(top10)} stocks (top 25/sector + BBS): {[t['ticker'] for t in top10]}")
                 scored = score_tickers(top10)
                 score_map = {r["ticker"]: r for r in scored}
                 for sname, stocks in sector_stocks.items():
