@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 00:30 ET
+# Last updated: 2026-03-18 11:30 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -332,6 +332,12 @@ def diagnose_ticker(ticker):
                 "price", "sma20", "sma50", "sma200", "perf_week", "perf_month",
                 "perf_quarter", "perf_half", "perf_year", "relative_volume", "sector"
             ]},
+            "sma_debug": {
+                "sma20": stock_fv.get("sma20"),
+                "sma50": stock_fv.get("sma50"),
+                "sma200": stock_fv.get("sma200"),
+                "all_keys_with_values": {k: v for k, v in stock_fv.items() if v and v != 0},
+            },
             "context": {
                 "spy_perf_63d": spy_perf_63d,
                 "spy_above_200ma": spy_above_200ma,
@@ -346,11 +352,29 @@ def diagnose_ticker(ticker):
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/api/sma-test/<ticker>")
+def sma_test(ticker):
+    """Test SMA fetching directly — shows raw TradingView output."""
+    try:
+        from tradingview_screener import Query, col as tv_col
+        _, df = (Query()
+            .select("name", "close", "SMA20", "SMA50", "SMA200")
+            .set_markets("america")
+            .where(tv_col("name").isin([ticker.upper()]))
+            .limit(5)
+            .get_scanner_data()
+        )
+        rows = df.to_dict(orient="records")
+        return jsonify({
+            "ticker": ticker.upper(),
+            "columns": list(df.columns),
+            "rows": rows,
+            "row_count": len(rows),
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
-
-# ============================================================
-# WATCHLIST
-# ============================================================
 
 @app.route("/api/watchlist", methods=["GET"])
 def get_watchlist():
