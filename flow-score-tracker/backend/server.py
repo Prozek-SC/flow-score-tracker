@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 00:20 ET
+# Last updated: 2026-03-18 00:30 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -144,30 +144,12 @@ def debug():
         from data_clients import FinvizClient
         fv = FinvizClient()
         if fv.token:
-            import pandas as pd
-            from io import StringIO
-            import requests as _req
-            tickers_str = "TRGP"
-            views_report = {}
-            for v in ["141", "150", "151", "152", "153", "154", "155", "160", "161"]:
-                try:
-                    r = _req.get(f"https://elite.finviz.com/export.ashx?v={v}&t={tickers_str}&auth={fv.token}", timeout=10)
-                    if r.status_code == 200:
-                        df = pd.read_csv(StringIO(r.text))
-                        cols = list(df.columns)
-                        has_sma = any("SMA" in c or "Moving" in c or "200" in c for c in cols)
-                        has_perf = any("Perf" in c or "Performance" in c for c in cols)
-                        views_report[f"v={v}"] = {"columns": cols, "has_sma": has_sma, "has_perf": has_perf}
-                except Exception as e:
-                    views_report[f"v={v}"] = {"error": str(e)}
-
             data = fv.get_ticker_data(["SPY", "TRGP"])
             spy = data.get("SPY", {})
             trgp = data.get("TRGP", {})
             report["finviz"] = {
                 "status": "ok",
                 "token_present": True,
-                "view_probe": views_report,
                 "parsed_SPY": {k: v for k, v in spy.items() if k in
                         ["price", "sma200", "perf_quarter", "perf_month", "perf_half", "perf_year", "perf_week"]},
                 "parsed_TRGP": {k: v for k, v in trgp.items() if k in
