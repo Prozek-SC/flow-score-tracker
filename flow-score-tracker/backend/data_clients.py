@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 12:00 ET
+# Last updated: 2026-03-18 12:10 ET
 """
 Data Clients — Finviz Elite + Tradier Options
 """
@@ -117,10 +117,37 @@ class FinvizClient:
         # SMA20/50/200 reliably during market hours.
         tv_symbols = [s for s in result.keys() if len(s) <= 5 and s != "SPY"]
         if tv_symbols:
-            sma_data = self.get_sma_data(tv_symbols)
-            for ticker, sma in sma_data.items():
-                if ticker in result:
-                    result[ticker].update(sma)
+            try:
+                from tradingview_screener import Query, col as tv_col
+                import time
+                time.sleep(1.0)  # pause after Finviz requests to avoid rate limiting
+                for ticker in tv_symbols:
+                    try:
+                        _, df_s = (Query()
+                            .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
+                            .set_markets("america")
+                            .where(tv_col("name").isin([ticker]))
+                            .limit(3)
+                            .get_scanner_data()
+                        )
+                        if len(df_s) > 0:
+                            row = df_s.iloc[0]
+                            result[ticker].update({
+                                "sma20":    round(float(row["SMA20"] or 0), 2),
+                                "sma50":    round(float(row["SMA50"] or 0), 2),
+                                "sma200":   round(float(row["SMA200"] or 0), 2),
+                                "rsi":      float(row["RSI"] or 50),
+                                "52w_high": float(row["High.52W"] or 0),
+                                "52w_low":  float(row["Low.52W"] or 0),
+                            })
+                            print(f"  SMA OK {ticker}: sma50={result[ticker]['sma50']}")
+                        else:
+                            print(f"  SMA empty {ticker}: 0 rows returned")
+                        time.sleep(0.3)
+                    except Exception as e:
+                        print(f"  SMA error {ticker}: {e}")
+            except Exception as e:
+                print(f"  TV import error: {e}")
 
         # --- Request 4: v=131 Ownership (Inst Trans, Short Float) ---
         try:
