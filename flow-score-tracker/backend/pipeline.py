@@ -1,3 +1,4 @@
+# Last updated: 2026-03-18 12:20 ET
 """
 Flow Score Pipeline
 Orchestrates weekly Flow Score + daily price updates
@@ -157,6 +158,35 @@ def score_tickers(ticker_sector_list: list) -> list:
         print(f"  Finviz error: {e}")
         fv_batch = {}
 
+    # Fetch SMA data separately via TradingView (Finviz API has no SMA columns)
+    try:
+        from tradingview_screener import Query, col as tv_col
+        import time
+        time.sleep(1.5)  # pause after Finviz HTTP requests
+        equity_tickers = [t for t in tickers if len(t) <= 5]
+        if equity_tickers:
+            _, df_sma = (Query()
+                .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
+                .set_markets("america")
+                .where(tv_col("name").isin(equity_tickers))
+                .limit(len(equity_tickers) + 10)
+                .get_scanner_data()
+            )
+            sma_hit = 0
+            for _, row in df_sma.iterrows():
+                t = str(row["name"]).strip()
+                if t in fv_batch:
+                    fv_batch[t].update({
+                        "sma20":  round(float(row["SMA20"] or 0), 2),
+                        "sma50":  round(float(row["SMA50"] or 0), 2),
+                        "sma200": round(float(row["SMA200"] or 0), 2),
+                        "rsi":    float(row["RSI"] or 50),
+                    })
+                    sma_hit += 1
+            print(f"  Pipeline SMA: {sma_hit}/{len(equity_tickers)} tickers")
+    except Exception as e:
+        print(f"  Pipeline SMA error: {e}")
+
     # SPY 63-day perf from Finviz perf_quarter field
     spy_fv = fv_batch.get("SPY", {})
     spy_perf_63d = spy_fv.get("perf_quarter", 0)
@@ -257,6 +287,33 @@ def run_weekly_flow_score():
     except Exception as e:
         print(f"  Finviz error: {e}")
         fv_batch = {}
+
+    # Fetch SMA data separately via TradingView
+    try:
+        from tradingview_screener import Query, col as tv_col
+        import time
+        time.sleep(1.5)
+        equity_tickers_w = [t for t in tickers if len(t) <= 5]
+        if equity_tickers_w:
+            _, df_sma_w = (Query()
+                .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI")
+                .set_markets("america")
+                .where(tv_col("name").isin(equity_tickers_w))
+                .limit(len(equity_tickers_w) + 10)
+                .get_scanner_data()
+            )
+            for _, row in df_sma_w.iterrows():
+                t = str(row["name"]).strip()
+                if t in fv_batch:
+                    fv_batch[t].update({
+                        "sma20":  round(float(row["SMA20"] or 0), 2),
+                        "sma50":  round(float(row["SMA50"] or 0), 2),
+                        "sma200": round(float(row["SMA200"] or 0), 2),
+                        "rsi":    float(row["RSI"] or 50),
+                    })
+            print(f"  Weekly SMA: fetched for {len(df_sma_w)} tickers")
+    except Exception as e:
+        print(f"  Weekly SMA error: {e}")
 
     # --- SPY 63-day perf from Finviz perf_quarter ---
     spy_fv2 = fv_batch.get("SPY", {})
