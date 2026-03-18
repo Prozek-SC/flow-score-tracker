@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 01:00 ET
+# Last updated: 2026-03-18 01:15 ET
 """
 Data Clients — Finviz Elite + Tradier Options
 """
@@ -112,48 +112,51 @@ class FinvizClient:
         except Exception as e:
             print(f"  Finviz v=141 error: {e}")
 
-        # --- Request 3: SMA data via TradingView screener ---
-        # Finviz export API doesn't expose SMA columns in any view.
-        # TradingView screener reliably returns SMA20/50/200 for any ticker list.
+        # --- Request 3: SMA data via Finviz quote page scrape ---
+        # Neither the Finviz export API nor TradingView (when markets closed)
+        # reliably return SMA data. Scraping the Finviz quote page works 24/7.
         if symbols:
-            try:
-                from tradingview_screener import Query, col
-                tv_tickers = [s for s in symbols if s != "SPY"]  # TV uses different SPY format
-                all_tickers = symbols  # include SPY
-
-                _, df_tv = (Query()
-                    .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
-                    .set_markets("america")
-                    .where(col("name").isin(all_tickers))
-                    .limit(len(all_tickers) + 5)
-                    .get_scanner_data()
-                )
-                for _, row in df_tv.iterrows():
-                    ticker = str(row.get("name", "")).strip()
-                    if ticker not in result:
-                        continue
-                    price = result[ticker].get("price", 0) or float(row.get("close", 0))
-                    sma20  = float(row.get("SMA20", 0) or 0)
-                    sma50  = float(row.get("SMA50", 0) or 0)
-                    sma200 = float(row.get("SMA200", 0) or 0)
-                    result[ticker].update({
-                        "sma20":    round(sma20, 2),
-                        "sma50":    round(sma50, 2),
-                        "sma200":   round(sma200, 2),
-                        "rsi":      float(row.get("RSI", 50) or 50),
-                        "52w_high": float(row.get("High.52W", 0) or 0),
-                        "52w_low":  float(row.get("Low.52W", 0) or 0),
-                    })
-                    # Update price from TV if Finviz didn't get it
-                    if price > 0 and result[ticker].get("price", 0) == 0:
-                        result[ticker]["price"] = round(price, 2)
-                tv_count = sum(1 for t in result if result[t].get("sma50", 0) > 0)
-                print(f"  TradingView SMA: fetched for {tv_count}/{len(result)} tickers")
-                if result.get("TRGP"):
-                    t = result["TRGP"]
-                    print(f"  TRGP: sma20={t.get('sma20')} sma50={t.get('sma50')} sma200={t.get('sma200')}")
-            except Exception as e:
-                print(f"  TradingView SMA fetch error: {e}")
+            import re
+            for ticker in list(result.keys()):
+                try:
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Accept": "text/html",
+                    }
+                    url_q = f"https://finviz.com/quote.ashx?t={ticker}&ty=c&ta=1&p=d"
+                    r = requests.get(url_q, headers=headers, timeout=10)
+                    if r.status_code != 200:
+                        # Try elite endpoint with auth
+                        url_q = f"https://elite.finviz.com/quote.ashx?t={ticker}&auth={self.token}"
+                        r = requests.get(url_q, headers=headers, timeout=10)
+                    if r.status_code == 200:
+                        html = r.text
+                        price = result[ticker].get("price", 0)
+                        # Finviz quote page shows SMA as e.g. "SMA20" "-5.23%"
+                        # Pattern: find table cell with "SMA20" then get adjacent value
+                        def extract_sma_pct(html, label):
+                            # Look for the label and capture the next percentage value
+                            pattern = rf'{label}[^%]*?([-+]?\d+\.?\d*%)'
+                            m = re.search(pattern, html)
+                            if m:
+                                try:
+                                    pct = float(m.group(1).replace("%","")) / 100
+                                    return round(price / (1 + pct), 2) if price > 0 else 0
+                                except:
+                                    return 0
+                            return 0
+                        sma20  = extract_sma_pct(html, "SMA20")
+                        sma50  = extract_sma_pct(html, "SMA50")
+                        sma200 = extract_sma_pct(html, "SMA200")
+                        if sma50 > 0:
+                            result[ticker].update({
+                                "sma20": sma20, "sma50": sma50, "sma200": sma200
+                            })
+                            print(f"  Finviz quote {ticker}: sma20={sma20} sma50={sma50} sma200={sma200}")
+                        else:
+                            print(f"  Finviz quote {ticker}: SMA parse failed, status={r.status_code}")
+                except Exception as e:
+                    print(f"  Finviz quote scrape error {ticker}: {e}")
 
         # --- Request 4: v=131 Ownership (Inst Trans, Short Float) ---
         try:
