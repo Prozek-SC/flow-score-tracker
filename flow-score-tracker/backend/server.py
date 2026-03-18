@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 11:50 ET
+# Last updated: 2026-03-18 12:20 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -297,6 +297,13 @@ def diagnose_ticker(ticker):
         fv_batch = fv.get_ticker_data([ticker.upper(), "SPY"])
         spy_fv = fv_batch.get("SPY", {})
         stock_fv = fv_batch.get(ticker.upper(), {})
+
+        # Fetch SMA directly via TradingView (bypassing get_ticker_data)
+        sma_result = _tv_sma_test(ticker.upper())
+        if "SMA50" in sma_result and sma_result["SMA50"]:
+            stock_fv["sma20"]  = round(sma_result["SMA20"], 2)
+            stock_fv["sma50"]  = round(sma_result["SMA50"], 2)
+            stock_fv["sma200"] = round(sma_result["SMA200"], 2)
 
         spy_perf_63d = spy_fv.get("perf_quarter", 0)
         spy_price = spy_fv.get("price", 0)
