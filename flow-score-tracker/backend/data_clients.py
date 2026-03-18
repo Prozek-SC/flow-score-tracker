@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 11:30 ET
+# Last updated: 2026-03-18 11:40 ET
 """
 Data Clients — Finviz Elite + Tradier Options
 """
@@ -118,33 +118,39 @@ class FinvizClient:
         if symbols:
             try:
                 from tradingview_screener import Query, col as tv_col
-                _, df_tv = (Query()
-                    .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
-                    .set_markets("america")
-                    .where(tv_col("name").isin(list(result.keys())))
-                    .limit(len(result) + 5)
-                    .get_scanner_data()
-                )
-                print(f"  TV SMA columns returned: {list(df_tv.columns)}")
-                for _, row in df_tv.iterrows():
-                    ticker = str(row["name"]).strip()
-                    if ticker not in result:
-                        continue
-                    # Use direct column access, not row.get() which may have issues
-                    sma20  = float(row["SMA20"]  if "SMA20"  in df_tv.columns and row["SMA20"]  else 0)
-                    sma50  = float(row["SMA50"]  if "SMA50"  in df_tv.columns and row["SMA50"]  else 0)
-                    sma200 = float(row["SMA200"] if "SMA200" in df_tv.columns and row["SMA200"] else 0)
-                    rsi    = float(row["RSI"]    if "RSI"    in df_tv.columns and row["RSI"]    else 50)
-                    h52    = float(row["High.52W"] if "High.52W" in df_tv.columns and row["High.52W"] else 0)
-                    l52    = float(row["Low.52W"]  if "Low.52W"  in df_tv.columns and row["Low.52W"]  else 0)
-                    result[ticker].update({
-                        "sma20": round(sma20, 2), "sma50": round(sma50, 2),
-                        "sma200": round(sma200, 2), "rsi": rsi,
-                        "52w_high": h52, "52w_low": l52,
-                    })
-                    print(f"  TV SMA {ticker}: sma20={sma20} sma50={sma50} sma200={sma200}")
+                # TV returns name as plain ticker, ticker as "EXCHANGE:TICKER"
+                # Filter to reasonable equity tickers only
+                tv_symbols = [s for s in result.keys() if len(s) <= 5]
+                if tv_symbols:
+                    _, df_tv = (Query()
+                        .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
+                        .set_markets("america")
+                        .where(tv_col("name").isin(tv_symbols))
+                        .limit(len(tv_symbols) + 5)
+                        .get_scanner_data()
+                    )
+                    for _, row in df_tv.iterrows():
+                        # TV returns plain ticker in "name" column
+                        ticker = str(row["name"]).strip()
+                        if ticker not in result:
+                            continue
+                        sma20  = float(row["SMA20"]  if row["SMA20"]  is not None else 0)
+                        sma50  = float(row["SMA50"]  if row["SMA50"]  is not None else 0)
+                        sma200 = float(row["SMA200"] if row["SMA200"] is not None else 0)
+                        result[ticker].update({
+                            "sma20":    round(sma20, 2),
+                            "sma50":    round(sma50, 2),
+                            "sma200":   round(sma200, 2),
+                            "rsi":      float(row["RSI"] if row["RSI"] is not None else 50),
+                            "52w_high": float(row["High.52W"] if row["High.52W"] is not None else 0),
+                            "52w_low":  float(row["Low.52W"] if row["Low.52W"] is not None else 0),
+                        })
+                    tv_count = sum(1 for t in result if result[t].get("sma50", 0) > 0)
+                    import sys
+                    print(f"  TV SMA: {tv_count}/{len(tv_symbols)} tickers matched", file=sys.stderr)
             except Exception as e:
-                print(f"  TV SMA error: {e}")
+                import sys, traceback
+                print(f"  TV SMA error: {e}\n{traceback.format_exc()}", file=sys.stderr)
 
         # --- Request 4: v=131 Ownership (Inst Trans, Short Float) ---
         try:
