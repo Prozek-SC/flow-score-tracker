@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 12:20 ET
+# Last updated: 2026-03-18 13:00 ET
 """
 Flow Score Pipeline
 Orchestrates weekly Flow Score + daily price updates
@@ -487,6 +487,16 @@ def get_previous_score(sb, ticker: str) -> float:
 
 
 def save_weekly_score(sb, ticker: str, result: dict):
+    import math as _math
+    def _sanitize(obj):
+        if isinstance(obj, dict):
+            return {k: _sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_sanitize(v) for v in obj]
+        if isinstance(obj, float) and (_math.isnan(obj) or _math.isinf(obj)):
+            return None
+        return obj
+    result = _sanitize(result)
     row = {
         "ticker": ticker,
         "date": result.get("date", date.today().isoformat()),
