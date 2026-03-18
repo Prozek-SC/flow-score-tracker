@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 11:40 ET
+# Last updated: 2026-03-18 12:00 ET
 """
 Data Clients — Finviz Elite + Tradier Options
 """
@@ -115,42 +115,12 @@ class FinvizClient:
         # --- Request 3: SMA data via TradingView screener ---
         # Finviz export API has no SMA columns. TradingView screener returns
         # SMA20/50/200 reliably during market hours.
-        if symbols:
-            try:
-                from tradingview_screener import Query, col as tv_col
-                # TV returns name as plain ticker, ticker as "EXCHANGE:TICKER"
-                # Filter to reasonable equity tickers only
-                tv_symbols = [s for s in result.keys() if len(s) <= 5]
-                if tv_symbols:
-                    _, df_tv = (Query()
-                        .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
-                        .set_markets("america")
-                        .where(tv_col("name").isin(tv_symbols))
-                        .limit(len(tv_symbols) + 5)
-                        .get_scanner_data()
-                    )
-                    for _, row in df_tv.iterrows():
-                        # TV returns plain ticker in "name" column
-                        ticker = str(row["name"]).strip()
-                        if ticker not in result:
-                            continue
-                        sma20  = float(row["SMA20"]  if row["SMA20"]  is not None else 0)
-                        sma50  = float(row["SMA50"]  if row["SMA50"]  is not None else 0)
-                        sma200 = float(row["SMA200"] if row["SMA200"] is not None else 0)
-                        result[ticker].update({
-                            "sma20":    round(sma20, 2),
-                            "sma50":    round(sma50, 2),
-                            "sma200":   round(sma200, 2),
-                            "rsi":      float(row["RSI"] if row["RSI"] is not None else 50),
-                            "52w_high": float(row["High.52W"] if row["High.52W"] is not None else 0),
-                            "52w_low":  float(row["Low.52W"] if row["Low.52W"] is not None else 0),
-                        })
-                    tv_count = sum(1 for t in result if result[t].get("sma50", 0) > 0)
-                    import sys
-                    print(f"  TV SMA: {tv_count}/{len(tv_symbols)} tickers matched", file=sys.stderr)
-            except Exception as e:
-                import sys, traceback
-                print(f"  TV SMA error: {e}\n{traceback.format_exc()}", file=sys.stderr)
+        tv_symbols = [s for s in result.keys() if len(s) <= 5 and s != "SPY"]
+        if tv_symbols:
+            sma_data = self.get_sma_data(tv_symbols)
+            for ticker, sma in sma_data.items():
+                if ticker in result:
+                    result[ticker].update(sma)
 
         # --- Request 4: v=131 Ownership (Inst Trans, Short Float) ---
         try:
@@ -183,6 +153,41 @@ class FinvizClient:
     def get_sector_etf_data(self, etf_symbols: list) -> dict:
         """Fetch ETF-level data for sector scoring."""
         return self.get_ticker_data(etf_symbols)
+
+    def get_sma_data(self, symbols: list) -> dict:
+        """
+        Fetch SMA20/50/200 for a list of tickers via TradingView screener.
+        Returns dict keyed by ticker with sma20/sma50/sma200/rsi/52w_high/52w_low.
+        """
+        if not symbols:
+            return {}
+        try:
+            from tradingview_screener import Query, col as tv_col
+            import time
+            time.sleep(0.5)  # brief pause to avoid rate limiting after Finviz calls
+            _, df = (Query()
+                .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
+                .set_markets("america")
+                .where(tv_col("name").isin(symbols))
+                .limit(len(symbols) + 10)
+                .get_scanner_data()
+            )
+            result = {}
+            for _, row in df.iterrows():
+                ticker = str(row["name"]).strip()
+                result[ticker] = {
+                    "sma20":    round(float(row["SMA20"]  or 0), 2),
+                    "sma50":    round(float(row["SMA50"]  or 0), 2),
+                    "sma200":   round(float(row["SMA200"] or 0), 2),
+                    "rsi":      float(row["RSI"] or 50),
+                    "52w_high": float(row["High.52W"] or 0),
+                    "52w_low":  float(row["Low.52W"] or 0),
+                }
+            print(f"  get_sma_data: {len(result)}/{len(symbols)} tickers. Sample: {list(result.items())[:1]}")
+            return result
+        except Exception as e:
+            print(f"  get_sma_data error: {e}")
+            return {}
 
     def _pct(self, val) -> float:
         try:
