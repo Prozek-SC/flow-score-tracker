@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 00:45 ET
+# Last updated: 2026-03-18 01:00 ET
 """
 Data Clients — Finviz Elite + Tradier Options
 """
@@ -112,46 +112,48 @@ class FinvizClient:
         except Exception as e:
             print(f"  Finviz v=141 error: {e}")
 
-        # --- Request 3: SMA data via finvizfinance library ---
-        # The Finviz export API doesn't expose SMA columns in any view.
-        # finvizfinance scrapes individual ticker pages which do have SMA data.
-        if len(symbols) <= 50:
+        # --- Request 3: SMA data via TradingView screener ---
+        # Finviz export API doesn't expose SMA columns in any view.
+        # TradingView screener reliably returns SMA20/50/200 for any ticker list.
+        if symbols:
             try:
-                from finvizfinance.quote import finvizfinance as fvf
-                import time
-                for ticker in list(result.keys()):
-                    try:
-                        stock = fvf(ticker)
-                        fundament = stock.ticker_fundament()  # note: no 's'
-                        if len(result) <= 3:  # log first few for debugging
-                            sma_keys = {k: v for k, v in fundament.items()
-                                       if any(x in k for x in ["SMA", "200", "50-D", "20-D", "RSI", "52W"])}
-                            print(f"  finvizfinance {ticker} SMA keys: {sma_keys}")
-                        price = result[ticker].get("price", 0)
-                        # Finviz reports SMA as % distance: e.g. "-5.23%"
-                        # Convert: sma = price / (1 + pct/100)
-                        def pct_to_sma(pct_str, price):
-                            try:
-                                pct = float(str(pct_str).replace("%","").strip()) / 100
-                                return round(price / (1 + pct), 2) if price > 0 and (1 + pct) != 0 else 0
-                            except:
-                                return 0
-                        result[ticker].update({
-                            "sma20":    pct_to_sma(fundament.get("SMA20", "0%"), price),
-                            "sma50":    pct_to_sma(fundament.get("SMA50", "0%"), price),
-                            "sma200":   pct_to_sma(fundament.get("SMA200", "0%"), price),
-                            "rsi":      float(str(fundament.get("RSI (14)", 50)).replace("%","") or 50),
-                            "52w_high": self._float(str(fundament.get("52W High", "0")).replace(",","")),
-                            "52w_low":  self._float(str(fundament.get("52W Low", "0")).replace(",","")),
-                        })
-                        time.sleep(0.15)
-                    except Exception as e:
-                        print(f"  finvizfinance error for {ticker}: {e}")
-                print(f"  finvizfinance: SMA fetch complete. Sample TRGP sma50={result.get('TRGP', {}).get('sma50', 'N/A')}")
-            except ImportError:
-                print("  finvizfinance not installed — SMA data unavailable")
-        else:
-            print(f"  Skipping SMA fetch — too many tickers ({len(symbols)}), using price as MA proxy")
+                from tradingview_screener import Query, col
+                tv_tickers = [s for s in symbols if s != "SPY"]  # TV uses different SPY format
+                all_tickers = symbols  # include SPY
+
+                _, df_tv = (Query()
+                    .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
+                    .set_markets("america")
+                    .where(col("name").isin(all_tickers))
+                    .limit(len(all_tickers) + 5)
+                    .get_scanner_data()
+                )
+                for _, row in df_tv.iterrows():
+                    ticker = str(row.get("name", "")).strip()
+                    if ticker not in result:
+                        continue
+                    price = result[ticker].get("price", 0) or float(row.get("close", 0))
+                    sma20  = float(row.get("SMA20", 0) or 0)
+                    sma50  = float(row.get("SMA50", 0) or 0)
+                    sma200 = float(row.get("SMA200", 0) or 0)
+                    result[ticker].update({
+                        "sma20":    round(sma20, 2),
+                        "sma50":    round(sma50, 2),
+                        "sma200":   round(sma200, 2),
+                        "rsi":      float(row.get("RSI", 50) or 50),
+                        "52w_high": float(row.get("High.52W", 0) or 0),
+                        "52w_low":  float(row.get("Low.52W", 0) or 0),
+                    })
+                    # Update price from TV if Finviz didn't get it
+                    if price > 0 and result[ticker].get("price", 0) == 0:
+                        result[ticker]["price"] = round(price, 2)
+                tv_count = sum(1 for t in result if result[t].get("sma50", 0) > 0)
+                print(f"  TradingView SMA: fetched for {tv_count}/{len(result)} tickers")
+                if result.get("TRGP"):
+                    t = result["TRGP"]
+                    print(f"  TRGP: sma20={t.get('sma20')} sma50={t.get('sma50')} sma200={t.get('sma200')}")
+            except Exception as e:
+                print(f"  TradingView SMA fetch error: {e}")
 
         # --- Request 4: v=131 Ownership (Inst Trans, Short Float) ---
         try:
