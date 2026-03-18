@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 11:30 ET
+# Last updated: 2026-03-18 11:50 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -254,6 +254,30 @@ def debug():
 
     return jsonify(report)
 
+def _tv_sma_test(ticker):
+    """Direct TradingView SMA test — returns raw result or error."""
+    try:
+        from tradingview_screener import Query, col as tv_col
+        _, df = (Query()
+            .select("name", "close", "SMA20", "SMA50", "SMA200")
+            .set_markets("america")
+            .where(tv_col("name").isin([ticker]))
+            .limit(5)
+            .get_scanner_data()
+        )
+        if len(df) == 0:
+            return {"error": "no rows returned", "ticker": ticker}
+        row = df.iloc[0]
+        return {
+            "name": str(row["name"]),
+            "SMA20": float(row["SMA20"] if row["SMA20"] is not None else 0),
+            "SMA50": float(row["SMA50"] if row["SMA50"] is not None else 0),
+            "SMA200": float(row["SMA200"] if row["SMA200"] is not None else 0),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.route("/api/diagnose/<ticker>")
 def diagnose_ticker(ticker):
     """
@@ -337,6 +361,7 @@ def diagnose_ticker(ticker):
                 "sma50": stock_fv.get("sma50"),
                 "sma200": stock_fv.get("sma200"),
                 "all_keys_with_values": {k: v for k, v in stock_fv.items() if v and v != 0},
+                "tv_sma_direct_test": _tv_sma_test(ticker.upper()),
             },
             "context": {
                 "spy_perf_63d": spy_perf_63d,
