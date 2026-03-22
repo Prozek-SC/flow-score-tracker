@@ -1,4 +1,4 @@
-// Last updated: 2026-03-18 12:35 ET
+// Last updated: 2026-03-22 10:00 ET
 import { useState, useEffect, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -772,18 +772,20 @@ export default function App() {
                 {/* Table header */}
                 <div style={{
                   display: "grid",
-                  gridTemplateColumns: "120px 90px 80px 120px 1fr 1fr 1fr",
-                  gap: 8, padding: "10px 16px",
+                  gridTemplateColumns: "110px 70px 55px 75px 75px 65px 50px 55px 50px",
+                  gap: 6, padding: "10px 16px",
                   borderBottom: "1px solid #1a1a2e",
-                  fontSize: 11, color: "#666", letterSpacing: 0.2, textTransform: "uppercase"
+                  fontSize: 10, color: "#666", letterSpacing: 0.2, textTransform: "uppercase"
                 }}>
                   <div>Ticker</div>
                   <div>Score</div>
+                  <div>Prev</div>
+                  <div>Wk Jump</div>
+                  <div>Day Jump</div>
                   <div>Rating</div>
-                  <div>Source</div>
-                  <div>Capital Flow</div>
-                  <div>Trend</div>
-                  <div>Momentum</div>
+                  <div style={{ textAlign: "center" }}>CF</div>
+                  <div style={{ textAlign: "center" }}>Trend</div>
+                  <div style={{ textAlign: "center" }}>Mom</div>
                 </div>
                 {scores.map(d => {
                   const pillars = d.pillars || {};
@@ -795,56 +797,56 @@ export default function App() {
                     : d.flow_score >= 50 ? "#ffd700"
                     : d.flow_score >= 30 ? "#ff9944" : "#ff3333";
 
-                  // Determine scanner source from watchlist sector tag or score metadata
-                  const isBBS = d.rating === "BBS" || (d.sector && d.sector.includes("BBS"));
-                  const sourceLabel = isBBS ? "Big Blue Sky" : "50-Day Breakout";
-                  const sourceColor = isBBS ? "#7b9fff" : "#00d4aa";
+                  const burst = d.burst || {};
+                  const weekJump = d.week_jump != null ? d.week_jump : burst.score_jump;
+                  const dayJump = d.day_jump;
+                  const prevScore = d.prev_score;
+                  const isBurst = burst.is_burst || (weekJump != null && weekJump >= 15 && d.flow_score >= 65);
+                  const jumpColor = (j) => j > 0 ? "#00ff88" : j < 0 ? "#ff4444" : "#888";
+                  const fmtJump = (j) => j == null ? "—" : j > 0 ? `+${Math.round(j*10)/10}` : `${Math.round(j*10)/10}`;
 
                   return (
                     <div key={d.ticker} style={{
                       display: "grid",
-                      gridTemplateColumns: "120px 90px 80px 120px 1fr 1fr 1fr",
-                      gap: 8, padding: "14px 16px",
+                      gridTemplateColumns: "110px 70px 55px 75px 75px 65px 50px 55px 50px",
+                      gap: 6, padding: "12px 16px",
                       borderBottom: "1px solid #0f0f1e",
                       alignItems: "center",
+                      background: isBurst ? "rgba(255,200,0,0.04)" : "transparent",
                     }}
                       onMouseEnter={e => e.currentTarget.style.background = "#0f0f22"}
-                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      onMouseLeave={e => e.currentTarget.style.background = isBurst ? "rgba(255,200,0,0.04)" : "transparent"}
                     >
                       <div>
-                        <a href={tvLink(d.ticker)} target="_blank" rel="noreferrer"
-                          style={{ fontSize: 16, fontWeight: 900, color: "#00d4aa", textDecoration: "none", fontFamily: "'Inter', sans-serif" }}
-                          onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
-                          onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
-                          {d.ticker} ↗
-                        </a>
-                        {d.price > 0 && <div style={{ fontSize: 12, color: "#888" }}>${(+d.price).toFixed(2)}</div>}
+                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <a href={tvLink(d.ticker)} target="_blank" rel="noreferrer"
+                            style={{ fontSize: 14, fontWeight: 900, color: "#00d4aa", textDecoration: "none", fontFamily: "'Inter', sans-serif" }}
+                            onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
+                            onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
+                            {d.ticker}
+                          </a>
+                          {isBurst && <span style={{ fontSize: 8, fontWeight: 800, color: "#ffd700", background: "#ffd70022", padding: "1px 4px", borderRadius: 3, letterSpacing: 0.5 }}>BURST</span>}
+                        </div>
+                        {d.price > 0 && <div style={{ fontSize: 11, color: "#555" }}>${(+d.price).toFixed(2)}</div>}
                       </div>
-                      <div style={{ fontSize: 22, fontWeight: 900, fontVariantNumeric: 'tabular-nums', color: scoreColor, fontFamily: "'Inter', sans-serif" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: scoreColor, fontFamily: "'Inter', sans-serif" }}>
                         {d.flow_score ?? "—"}
                       </div>
-                      <div style={{ fontSize: 13, color: scoreColor, fontWeight: 700 }}>
+                      <div style={{ fontSize: 13, color: "#555", fontVariantNumeric: "tabular-nums" }}>
+                        {prevScore ?? "—"}
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: jumpColor(weekJump), fontVariantNumeric: "tabular-nums" }}>
+                        {fmtJump(weekJump)}
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: jumpColor(dayJump), fontVariantNumeric: "tabular-nums" }}>
+                        {fmtJump(dayJump)}
+                      </div>
+                      <div style={{ fontSize: 11, color: scoreColor, fontWeight: 700 }}>
                         {d.rating || "—"}
                       </div>
-                      <div>
-                        <span style={{
-                          fontSize: 11, fontWeight: 700, color: sourceColor,
-                          background: sourceColor + "22", padding: "3px 8px",
-                          borderRadius: 4, letterSpacing: 1
-                        }}>{sourceLabel}</span>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 15, fontWeight: 700, color: "#aaa" }}>{cf}</span>
-                        <span style={{ fontSize: 11, color: "#555", marginLeft: 4 }}>/40</span>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 15, fontWeight: 700, color: "#aaa" }}>{tr}</span>
-                        <span style={{ fontSize: 11, color: "#555", marginLeft: 4 }}>/30</span>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 15, fontWeight: 700, color: "#aaa" }}>{mo}</span>
-                        <span style={{ fontSize: 11, color: "#555", marginLeft: 4 }}>/30</span>
-                      </div>
+                      <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: "#aaa" }}>{cf}</div>
+                      <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: "#aaa" }}>{typeof tr === "number" ? Math.round(tr) : tr}</div>
+                      <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: "#aaa" }}>{typeof mo === "number" ? Math.round(mo) : mo}</div>
                     </div>
                   );
                 })}
