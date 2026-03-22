@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 13:00 ET
+# Last updated: 2026-03-22 10:00 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -462,17 +462,40 @@ def latest_scores():
         .order("date", desc=True) \
         .execute()
 
-    # Deduplicate — keep latest row per ticker
-    seen = {}
+    # Build full history per ticker to compute day-over-day jump
+    ticker_history = {}
     for row in (result.data or []):
         ticker = row.get("ticker")
-        if ticker not in seen:
-            try:
-                row["pillars"] = json.loads(row.get("pillars", "{}"))
-                row["burst"] = json.loads(row.get("burst", "{}"))
-            except:
-                pass
-            seen[ticker] = row
+        if ticker not in ticker_history:
+            ticker_history[ticker] = []
+        ticker_history[ticker].append(row)
+
+    # Deduplicate — keep latest row per ticker, add day_jump
+    seen = {}
+    for ticker, rows in ticker_history.items():
+        # rows already sorted desc by date
+        latest = rows[0]
+        try:
+            latest["pillars"] = json.loads(latest.get("pillars", "{}"))
+            latest["burst"] = json.loads(latest.get("burst", "{}"))
+        except:
+            pass
+
+        # Day-over-day jump: compare today vs yesterday's score
+        curr_score = latest.get("flow_score") or 0
+        if len(rows) > 1:
+            prev_day_score = rows[1].get("flow_score") or 0
+            latest["day_jump"] = round(curr_score - prev_day_score, 1)
+        else:
+            latest["day_jump"] = None
+
+        # Week jump — from burst blob or prev_score column
+        burst = latest.get("burst", {}) if isinstance(latest.get("burst"), dict) else {}
+        week_jump = burst.get("score_jump") or latest.get("score_jump")
+        latest["week_jump"] = week_jump
+        latest["prev_score"] = latest.get("prev_score") or burst.get("prev_score")
+
+        seen[ticker] = latest
 
     # Sort by flow_score descending
     scores = sorted(seen.values(), key=lambda x: x.get("flow_score", 0) or 0, reverse=True)
