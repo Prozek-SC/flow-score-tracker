@@ -1,4 +1,4 @@
-# Last updated: 2026-03-18 13:00 ET
+# Last updated: 2026-03-22 10:00 ET
 """
 Flow Score Pipeline
 Orchestrates weekly Flow Score + daily price updates
@@ -242,6 +242,7 @@ def score_tickers(ticker_sector_list: list) -> list:
             result["date"] = date.today().isoformat()
 
             prev = get_previous_score(sb, ticker)
+            result["prev_score"] = prev
             result["burst"] = detect_burst_trade(result["flow_score"], prev)
 
             results.append(result)
@@ -382,6 +383,7 @@ def run_weekly_flow_score():
 
             # Get previous score for burst detection
             prev = get_previous_score(sb, ticker)
+            result["prev_score"] = prev
             burst = detect_burst_trade(result["flow_score"], prev)
             result["burst"] = burst
 
@@ -501,6 +503,8 @@ def save_weekly_score(sb, ticker: str, result: dict):
         "ticker": ticker,
         "date": result.get("date", date.today().isoformat()),
         "flow_score": result.get("flow_score", 0),
+        "prev_score": result.get("prev_score"),        # previous week's score
+        "score_jump": result.get("burst", {}).get("score_jump"),  # week-over-week jump
         "rating": result.get("rating", ""),
         "label": result.get("label", ""),
         "action": result.get("action", ""),
