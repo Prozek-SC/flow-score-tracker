@@ -1,4 +1,4 @@
-# Last updated: 2026-03-26 10:30 ET
+# Last updated: 2026-03-26 11:00 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from supabase import create_client
 
 from pipeline import (run_weekly_flow_score, run_daily_price_update,
+                      run_daily_score,
                       get_ici_fund_flows, score_tickers,
                       get_sector_transitions, get_score_changes)
 from scanner import run_scanner
@@ -103,6 +104,12 @@ scheduler.add_job(weekly_job, CronTrigger(day_of_week="fri", hour=17, minute=0, 
 scheduler.add_job(daily_job, CronTrigger(day_of_week="mon-fri", hour=7, minute=0, timezone=ET))
 # Scanner: 7:05 AM ET weekdays (runs after daily price update)
 scheduler.add_job(scanner_job, CronTrigger(day_of_week="mon-fri", hour=7, minute=5, timezone=ET))
+# Daily trend score: 4:30 PM ET weekdays (after market close)
+scheduler.add_job(
+    lambda: run_daily_score(),
+    CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=ET),
+    id="daily_score_job"
+)
 scheduler.start()
 
 
@@ -463,6 +470,59 @@ def backfill_scores():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/api/scores/daily-run", methods=["POST"])
+def trigger_daily_score():
+    """Manually trigger daily trend score."""
+    def _run():
+        run_daily_score()
+    import threading
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/scores/daily-latest")
+def daily_scores_latest():
+    """
+    Latest daily trend scores per ticker.
+    Returns today's score + yesterday's for day jump calculation.
+    """
+    sb = get_sb()
+    cutoff = (date.today() - timedelta(days=3)).isoformat()
+    result = sb.table("daily_scores") \
+        .select("*") \
+        .gte("date", cutoff) \
+        .order("date", desc=True) \
+        .execute()
+
+    rows = result.data or []
+
+    # Group by ticker, keep last 2 dates
+    from collections import defaultdict
+    by_ticker = defaultdict(list)
+    for row in rows:
+        by_ticker[row["ticker"]].append(row)
+
+    output = {}
+    for ticker, ticker_rows in by_ticker.items():
+        latest = ticker_rows[0]
+        prev = ticker_rows[1] if len(ticker_rows) > 1 else None
+        day_jump = None
+        if prev and latest.get("trend_score") is not None and prev.get("trend_score") is not None:
+            day_jump = round(latest["trend_score"] - prev["trend_score"], 1)
+        output[ticker] = {
+            "date": latest["date"],
+            "price": latest.get("price"),
+            "trend_score": latest.get("trend_score"),
+            "rel_vol": latest.get("rel_vol"),
+            "above_20": latest.get("above_20"),
+            "above_50": latest.get("above_50"),
+            "above_200": latest.get("above_200"),
+            "day_jump": day_jump,
+        }
+
+    return jsonify(output)
+
+
 @app.route("/api/watchlist", methods=["GET"])
 def get_watchlist():
     sb = get_sb()
@@ -538,19 +598,37 @@ def latest_scores():
 
         # Day-over-day jump: compare today vs yesterday's score
         curr_score = latest.get("flow_score") or 0
-        if len(rows) > 1:
-            prev_day_score = rows[1].get("flow_score") or 0
-            latest["day_jump"] = round(curr_score - prev_day_score, 1)
-        else:
-            latest["day_jump"] = None
+        # Day jump comes from daily_scores table (populated separately)
+        latest["day_jump"] = None  # will be merged below
 
-        # Week jump — from burst blob or rev_score column
+        # Week jump — from burst blob or prev_score column
         burst = latest.get("burst", {}) if isinstance(latest.get("burst"), dict) else {}
         week_jump = burst.get("score_jump") or latest.get("score_jump")
         latest["week_jump"] = week_jump
-        latest["prev_score"] = latest.get("rev_score") or burst.get("prev_score")
+        latest["prev_score"] = latest.get("prev_score") or burst.get("prev_score")
 
         seen[ticker] = latest
+
+    # Merge day jump from daily_scores
+    try:
+        daily_cutoff = (date.today() - timedelta(days=3)).isoformat()
+        daily_result = sb.table("daily_scores") \
+            .select("ticker,date,trend_score,rel_vol,above_20,above_50,above_200") \
+            .gte("date", daily_cutoff) \
+            .order("date", desc=True) \
+            .execute()
+        from collections import defaultdict as _dd
+        daily_by_ticker = _dd(list)
+        for row in (daily_result.data or []):
+            daily_by_ticker[row["ticker"]].append(row)
+        for ticker, daily_rows in daily_by_ticker.items():
+            if ticker in seen and len(daily_rows) >= 2:
+                today_ts = daily_rows[0].get("trend_score")
+                prev_ts  = daily_rows[1].get("trend_score")
+                if today_ts is not None and prev_ts is not None:
+                    seen[ticker]["day_jump"] = round(today_ts - prev_ts, 1)
+    except Exception as e:
+        print(f"  daily_scores merge error: {e}")
 
     # Sort by flow_score descending
     scores = sorted(seen.values(), key=lambda x: x.get("flow_score", 0) or 0, reverse=True)
