@@ -1,4 +1,4 @@
-# Last updated: 2026-03-26 10:10 ET
+# Last updated: 2026-03-26 10:20 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -441,7 +441,7 @@ def backfill_scores():
                 jump = round(curr_score - (prev or 0), 1) if prev is not None else None
                 try:
                     sb.table("weekly_scores").update({
-                        "prev_score": prev,
+                        "rev_score": prev,
                         "score_jump": jump,
                     }).eq("id", row["id"]).execute()
                     updated += 1
@@ -541,11 +541,11 @@ def latest_scores():
         else:
             latest["day_jump"] = None
 
-        # Week jump — from burst blob or prev_score column
+        # Week jump — from burst blob or rev_score column
         burst = latest.get("burst", {}) if isinstance(latest.get("burst"), dict) else {}
         week_jump = burst.get("score_jump") or latest.get("score_jump")
         latest["week_jump"] = week_jump
-        latest["prev_score"] = latest.get("prev_score") or burst.get("prev_score")
+        latest["prev_score"] = latest.get("rev_score") or burst.get("prev_score")
 
         seen[ticker] = latest
 
