@@ -1,4 +1,4 @@
-# Last updated: 2026-03-26 10:20 ET
+# Last updated: 2026-03-26 11:00 ET
 """
 Flow Score Pipeline
 Orchestrates weekly Flow Score + daily price updates
@@ -471,8 +471,121 @@ def run_daily_price_update():
 
 
 # ============================================================
-# DATABASE HELPERS
+# DAILY TREND SCORE
 # ============================================================
+
+def run_daily_score():
+    """
+    Daily lightweight score: Trend pillar only (0-30) using TradingView SMAs.
+    Runs on all watchlist tickers + latest scanner results.
+    Saves to daily_scores table. Powers Day Jump in the UI.
+    """
+    print(f"[{datetime.now()}] Running daily trend score...")
+    sb = get_supabase()
+
+    # Collect tickers: watchlist + latest scanner results
+    watchlist = get_watchlist(sb)
+    watchlist_tickers = {w["ticker"]: w.get("sector", "") for w in watchlist}
+
+    # Pull latest scanner results for sector context
+    scanner_tickers = {}
+    try:
+        scan_result = sb.table("scanner_results") \
+            .select("results") \
+            .order("run_date", desc=True) \
+            .limit(1) \
+            .execute()
+        if scan_result.data:
+            import json as _json
+            results = _json.loads(scan_result.data[0]["results"])
+            for sector, stocks in results.get("sector_stocks", {}).items():
+                for s in stocks:
+                    scanner_tickers[s["ticker"]] = sector
+            for s in results.get("big_blue_sky", []):
+                scanner_tickers[s["ticker"]] = s.get("sector", "")
+    except Exception as e:
+        print(f"  Scanner results fetch error: {e}")
+
+    # Merge — watchlist takes priority for sector
+    all_tickers = {**scanner_tickers, **watchlist_tickers}
+    ticker_list = list(all_tickers.keys())
+    print(f"  Scoring {len(ticker_list)} tickers (watchlist + scanner)...")
+
+    # Fetch SMA data from TradingView in batches of 50
+    from tradingview_screener import Query, col as tv_col
+    import time
+    sma_data = {}
+    batch_size = 50
+    for i in range(0, len(ticker_list), batch_size):
+        batch = ticker_list[i:i + batch_size]
+        try:
+            _, df = (Query()
+                .select("name", "close", "SMA20", "SMA50", "SMA200",
+                        "relative_volume_10d_calc", "RSI")
+                .set_markets("america")
+                .where(tv_col("name").isin(batch))
+                .limit(len(batch) + 5)
+                .get_scanner_data()
+            )
+            for _, row in df.iterrows():
+                t = str(row["name"]).strip()
+                sma_data[t] = {
+                    "price":   float(row["close"] or 0),
+                    "sma20":   float(row["SMA20"] or 0),
+                    "sma50":   float(row["SMA50"] or 0),
+                    "sma200":  float(row["SMA200"] or 0),
+                    "rel_vol": float(row["relative_volume_10d_calc"] or 0),
+                }
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"  TV batch error: {e}")
+
+    print(f"  TradingView returned SMA data for {len(sma_data)} tickers")
+
+    # Score each ticker and save
+    saved = 0
+    for ticker in ticker_list:
+        tv = sma_data.get(ticker)
+        if not tv:
+            continue
+        price  = tv["price"]
+        sma20  = tv["sma20"]
+        sma50  = tv["sma50"]
+        sma200 = tv["sma200"]
+        rel_vol = tv["rel_vol"]
+
+        if price == 0:
+            continue
+
+        # Score trend pillar (reuses existing function)
+        trend = score_trend_pillar(price, sma20, sma50, sma200, [])
+        trend_score = trend["score"]
+
+        row = {
+            "ticker":      ticker,
+            "date":        date.today().isoformat(),
+            "price":       round(price, 2),
+            "sma20":       round(sma20, 2),
+            "sma50":       round(sma50, 2),
+            "sma200":      round(sma200, 2),
+            "trend_score": round(trend_score, 1),
+            "rel_vol":     round(rel_vol, 2),
+            "above_20":    bool(price > sma20) if sma20 else None,
+            "above_50":    bool(price > sma50) if sma50 else None,
+            "above_200":   bool(price > sma200) if sma200 else None,
+            "scored_at":   datetime.now().isoformat(),
+        }
+        try:
+            sb.table("daily_scores").upsert(row, on_conflict="ticker,date").execute()
+            saved += 1
+        except Exception as e:
+            print(f"  Save error {ticker}: {e}")
+
+    print(f"[{datetime.now()}] Daily score complete. {saved}/{len(ticker_list)} tickers saved.")
+    return saved
+
+
+
 
 def get_previous_score(sb, ticker: str) -> float:
     try:
