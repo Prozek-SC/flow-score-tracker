@@ -1,4 +1,4 @@
-// Last updated: 2026-03-22 10:00 ET
+// Last updated: 2026-03-26 11:00 ET
 import { useState, useEffect, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -648,6 +648,19 @@ export default function App() {
 
   const [scanning, setScanning] = useState(false);
   const [scanningMarket, setScanningMarket] = useState(false);
+  const [scoringDaily, setScoringDaily] = useState(false);
+
+  const runDailyScore = async () => {
+    setScoringDaily(true);
+    try {
+      await fetch(`${API_BASE}/api/scores/daily-run`, { method: "POST" });
+      // Poll for ~60s then refresh
+      setTimeout(async () => {
+        await fetchScores();
+        setScoringDaily(false);
+      }, 60000);
+    } catch (e) { setScoringDaily(false); }
+  };
 
   const runScan = async () => {
     setScanning(true);
@@ -720,6 +733,9 @@ export default function App() {
           </button>
           <button onClick={runScan} disabled={scanning} style={btnStyle(scanning ? "#1a1a2e" : "#00d4aa", scanning ? "#555" : "#000")}>
             {scanning ? "Scoring..." : "▶ Score Watchlist"}
+          </button>
+          <button onClick={runDailyScore} disabled={scoringDaily} style={btnStyle(scoringDaily ? "#1a1a2e" : "#7b5ea7", scoringDaily ? "#555" : "#fff")}>
+            {scoringDaily ? "⟳ Scoring..." : "📈 Daily Trend Score"}
           </button>
         </div>
       </div>
