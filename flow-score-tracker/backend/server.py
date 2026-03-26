@@ -1,4 +1,4 @@
-# Last updated: 2026-03-22 10:00 ET
+# Last updated: 2026-03-26 10:10 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -402,6 +402,58 @@ def sma_test(ticker):
             "columns": list(df.columns),
             "rows": rows,
             "row_count": len(rows),
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/api/admin/backfill-scores")
+def backfill_scores():
+    """
+    One-time backfill: populates prev_score and score_jump for all existing
+    weekly_scores rows by comparing consecutive scores per ticker.
+    Requires prev_score (float8) and score_jump (float8) columns in Supabase.
+    """
+    try:
+        sb = get_sb()
+        from collections import defaultdict
+
+        # Fetch all rows ordered by ticker then date ascending
+        result = sb.table("weekly_scores") \
+            .select("id,ticker,date,flow_score") \
+            .order("ticker") \
+            .order("date") \
+            .execute()
+        rows = result.data or []
+
+        # Group by ticker
+        by_ticker = defaultdict(list)
+        for row in rows:
+            by_ticker[row["ticker"]].append(row)
+
+        updated = 0
+        skipped = 0
+        for ticker, ticker_rows in by_ticker.items():
+            for i, row in enumerate(ticker_rows):
+                curr_score = row.get("flow_score") or 0
+                prev = ticker_rows[i - 1].get("flow_score") if i > 0 else None
+                jump = round(curr_score - (prev or 0), 1) if prev is not None else None
+                try:
+                    sb.table("weekly_scores").update({
+                        "prev_score": prev,
+                        "score_jump": jump,
+                    }).eq("id", row["id"]).execute()
+                    updated += 1
+                except Exception as e:
+                    skipped += 1
+
+        return jsonify({
+            "status": "done",
+            "total_rows": len(rows),
+            "updated": updated,
+            "skipped": skipped,
+            "tickers": len(by_ticker),
         })
     except Exception as e:
         import traceback
