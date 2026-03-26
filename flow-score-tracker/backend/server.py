@@ -1,4 +1,4 @@
-# Last updated: 2026-03-26 10:20 ET
+# Last updated: 2026-03-26 10:30 ET
 """
 Flow Score — Flask API Server
 Weekly scoring at Friday 5pm ET + Daily price update at 7am ET
@@ -434,6 +434,7 @@ def backfill_scores():
 
         updated = 0
         skipped = 0
+        errors = []
         for ticker, ticker_rows in by_ticker.items():
             for i, row in enumerate(ticker_rows):
                 curr_score = row.get("flow_score") or 0
@@ -441,12 +442,13 @@ def backfill_scores():
                 jump = round(curr_score - (prev or 0), 1) if prev is not None else None
                 try:
                     sb.table("weekly_scores").update({
-                        "rev_score": prev,
+                        "prev_score": prev,
                         "score_jump": jump,
                     }).eq("id", row["id"]).execute()
                     updated += 1
                 except Exception as e:
                     skipped += 1
+                    errors.append(str(e)[:100])
 
         return jsonify({
             "status": "done",
@@ -454,6 +456,7 @@ def backfill_scores():
             "updated": updated,
             "skipped": skipped,
             "tickers": len(by_ticker),
+            "sample_errors": errors[:3],
         })
     except Exception as e:
         import traceback
