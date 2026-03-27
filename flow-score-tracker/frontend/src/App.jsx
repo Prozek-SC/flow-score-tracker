@@ -1,5 +1,5 @@
 // Last updated: 2026-03-26 11:00 ET
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
@@ -785,6 +785,24 @@ export default function App() {
             )}
             {scores.length > 0 && (
               <div>
+                {/* Score distribution summary */}
+                <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+                  {["A", "B", "C", "D", "F"].map(grade => {
+                    const count = scores.filter(s => s.rating === grade).length;
+                    return (
+                      <div key={grade} style={{ display: "flex", alignItems: "center", gap: 8, background: "#0a0a18", border: `1px solid ${gradeColor(grade)}33`, borderRadius: 8, padding: "8px 16px" }}>
+                        <span style={{ fontSize: 12, color: gradeColor(grade), fontWeight: 700 }}>{grade}</span>
+                        <span style={{ fontSize: 22, fontWeight: 900, color: gradeColor(grade), fontFamily: "'Inter', sans-serif" }}>{count}</span>
+                      </div>
+                    );
+                  })}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 8, padding: "8px 16px", marginLeft: "auto" }}>
+                    <span style={{ fontSize: 12, color: "#666" }}>AVG</span>
+                    <span style={{ fontSize: 22, fontWeight: 900, color: "#aaa", fontFamily: "'Inter', sans-serif" }}>
+                      {Math.round(scores.reduce((sum, s) => sum + (s.flow_score || 0), 0) / scores.length)}
+                    </span>
+                  </div>
+                </div>
                 {/* Table header */}
                 <div style={{
                   display: "grid",
@@ -804,11 +822,11 @@ export default function App() {
                   <div style={{ textAlign: "center" }}>Mom</div>
                 </div>
                 {scores.map(d => {
-                  const pillars = d.pillars || {};
-                  const cf = pillars.capital_flow?.score ?? "—";
-                  const tr = pillars.trend?.score ?? "—";
-                  const mo = pillars.momentum?.score ?? "—";
-                  const scoreColor = d.flow_score >= 80 ? "#00ff88"
+                  const pillars = typeof d.pillars === "string" ? JSON.parse(d.pillars) : (d.pillars || {});
+                  const cf = pillars.capital_flow?.score ?? null;
+                  const tr = pillars.trend?.score ?? null;
+                  const mo = pillars.momentum?.score ?? null;
+                  const rowColor = d.flow_score >= 80 ? "#00ff88"
                     : d.flow_score >= 70 ? "#7fff7f"
                     : d.flow_score >= 50 ? "#ffd700"
                     : d.flow_score >= 30 ? "#ff9944" : "#ff3333";
@@ -820,50 +838,72 @@ export default function App() {
                   const isBurst = burst.is_burst || (weekJump != null && weekJump >= 15 && d.flow_score >= 65);
                   const jumpColor = (j) => j > 0 ? "#00ff88" : j < 0 ? "#ff4444" : "#888";
                   const fmtJump = (j) => j == null ? "—" : j > 0 ? `+${Math.round(j*10)/10}` : `${Math.round(j*10)/10}`;
+                  const isExpanded = selectedTicker === d.ticker;
 
                   return (
-                    <div key={d.ticker} style={{
-                      display: "grid",
-                      gridTemplateColumns: "110px 70px 55px 75px 75px 65px 50px 55px 50px",
-                      gap: 6, padding: "12px 16px",
-                      borderBottom: "1px solid #0f0f1e",
-                      alignItems: "center",
-                      background: isBurst ? "rgba(255,200,0,0.04)" : "transparent",
-                    }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#0f0f22"}
-                      onMouseLeave={e => e.currentTarget.style.background = isBurst ? "rgba(255,200,0,0.04)" : "transparent"}
-                    >
-                      <div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                          <a href={tvLink(d.ticker)} target="_blank" rel="noreferrer"
-                            style={{ fontSize: 14, fontWeight: 900, color: "#00d4aa", textDecoration: "none", fontFamily: "'Inter', sans-serif" }}
-                            onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
-                            onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
-                            {d.ticker}
-                          </a>
-                          {isBurst && <span style={{ fontSize: 8, fontWeight: 800, color: "#ffd700", background: "#ffd70022", padding: "1px 4px", borderRadius: 3, letterSpacing: 0.5 }}>BURST</span>}
+                    <Fragment key={d.ticker}>
+                      <div style={{
+                        display: "grid",
+                        gridTemplateColumns: "110px 70px 55px 75px 75px 65px 50px 55px 50px",
+                        gap: 6, padding: "12px 16px",
+                        borderBottom: isExpanded ? "none" : "1px solid #0f0f1e",
+                        alignItems: "center",
+                        background: isExpanded ? "#0f0f28" : isBurst ? "rgba(255,200,0,0.04)" : "transparent",
+                        cursor: "pointer",
+                      }}
+                        onClick={() => setSelectedTicker(t => t === d.ticker ? null : d.ticker)}
+                        onMouseEnter={e => { if (!isExpanded) e.currentTarget.style.background = "#0f0f22"; }}
+                        onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = isBurst ? "rgba(255,200,0,0.04)" : "transparent"; }}
+                      >
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                            <a href={tvLink(d.ticker)} target="_blank" rel="noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              style={{ fontSize: 14, fontWeight: 900, color: "#00d4aa", textDecoration: "none", fontFamily: "'Inter', sans-serif" }}
+                              onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
+                              onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
+                              {d.ticker}
+                            </a>
+                            {isBurst && <span style={{ fontSize: 8, fontWeight: 800, color: "#ffd700", background: "#ffd70022", padding: "1px 4px", borderRadius: 3, letterSpacing: 0.5 }}>BURST</span>}
+                          </div>
+                          {d.price > 0 && <div style={{ fontSize: 11, color: "#555" }}>${(+d.price).toFixed(2)}</div>}
                         </div>
-                        {d.price > 0 && <div style={{ fontSize: 11, color: "#555" }}>${(+d.price).toFixed(2)}</div>}
+                        <div style={{ fontSize: 20, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: rowColor, fontFamily: "'Inter', sans-serif" }}>
+                          {d.flow_score ?? "—"}
+                        </div>
+                        <div style={{ fontSize: 13, color: "#555", fontVariantNumeric: "tabular-nums" }}>
+                          {prevScore ?? "—"}
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: jumpColor(weekJump), fontVariantNumeric: "tabular-nums" }}>
+                          {fmtJump(weekJump)}
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: jumpColor(dayJump), fontVariantNumeric: "tabular-nums" }}>
+                          {fmtJump(dayJump)}
+                        </div>
+                        <div style={{ fontSize: 11, color: rowColor, fontWeight: 700 }}>
+                          {d.rating || "—"}
+                        </div>
+                        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: cf != null ? scoreColor(cf) : "#444" }}>{cf ?? "—"}</div>
+                        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: tr != null ? scoreColor(tr) : "#444" }}>{tr != null ? Math.round(tr) : "—"}</div>
+                        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: mo != null ? scoreColor(mo) : "#444" }}>{mo != null ? Math.round(mo) : "—"}</div>
                       </div>
-                      <div style={{ fontSize: 20, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: scoreColor, fontFamily: "'Inter', sans-serif" }}>
-                        {d.flow_score ?? "—"}
-                      </div>
-                      <div style={{ fontSize: 13, color: "#555", fontVariantNumeric: "tabular-nums" }}>
-                        {prevScore ?? "—"}
-                      </div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: jumpColor(weekJump), fontVariantNumeric: "tabular-nums" }}>
-                        {fmtJump(weekJump)}
-                      </div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: jumpColor(dayJump), fontVariantNumeric: "tabular-nums" }}>
-                        {fmtJump(dayJump)}
-                      </div>
-                      <div style={{ fontSize: 11, color: scoreColor, fontWeight: 700 }}>
-                        {d.rating || "—"}
-                      </div>
-                      <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: "#aaa" }}>{cf}</div>
-                      <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: "#aaa" }}>{typeof tr === "number" ? Math.round(tr) : tr}</div>
-                      <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: "#aaa" }}>{typeof mo === "number" ? Math.round(mo) : mo}</div>
-                    </div>
+                      {isExpanded && (
+                        <div style={{ padding: "16px 24px 20px", background: "#0a0a1e", borderBottom: "1px solid #1a1a2e" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 24 }}>
+                            <div>
+                              {Object.entries(SIGNAL_LABELS).map(([key, labelText]) => {
+                                const s = pillars[key] || {};
+                                return <SignalBar key={key} label={labelText} score={s.score || 0} detail={s.detail || ""} weight={SIGNAL_WEIGHTS[key]} />;
+                              })}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, color: "#666", letterSpacing: 0.2, textTransform: "uppercase", marginBottom: 8 }}>Score History</div>
+                              <HistoryChart ticker={d.ticker} />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </Fragment>
                   );
                 })}
               </div>
@@ -904,26 +944,48 @@ export default function App() {
             {watchlist.length === 0 && (
               <div style={{ color: "#888", fontSize: 14, padding: "32px 0" }}>No tickers yet.</div>
             )}
-            {watchlist.map(w => (
-              <div key={w.ticker} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                padding: "14px 16px", background: "#0a0a18", border: "1px solid #1a1a2e",
-                borderRadius: 6, marginBottom: 8 }}>
-                <div>
-                  <a href={tvLink(w.ticker)} target="_blank" rel="noreferrer"
-                    style={{ fontSize: 17, fontWeight: 700, color: "#00d4aa", fontFamily: "'Inter', sans-serif",
-                      textDecoration: "none" }}
-                    onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
-                    onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
-                    {w.ticker} ↗
-                  </a>
-                  {w.sector && <span style={{ fontSize: 13, color: "#aaa", marginLeft: 12 }}>{w.sector}</span>}
+            {watchlist.map(w => {
+              const scoreData = scores.find(s => s.ticker === w.ticker);
+              return (
+                <div key={w.ticker} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "14px 16px", background: "#0a0a18", border: "1px solid #1a1a2e",
+                  borderRadius: 6, marginBottom: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                    {scoreData && (
+                      <div style={{ textAlign: "center", minWidth: 44 }}>
+                        <div style={{ fontSize: 22, fontWeight: 900, color: scoreColor(scoreData.flow_score), fontFamily: "'Inter', sans-serif", lineHeight: 1 }}>
+                          {Math.round(scoreData.flow_score)}
+                        </div>
+                        <div style={{ fontSize: 11, color: gradeColor(scoreData.rating), fontWeight: 700, marginTop: 2 }}>
+                          {scoreData.rating}
+                        </div>
+                      </div>
+                    )}
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <a href={tvLink(w.ticker)} target="_blank" rel="noreferrer"
+                          style={{ fontSize: 17, fontWeight: 700, color: "#00d4aa", fontFamily: "'Inter', sans-serif",
+                            textDecoration: "none" }}
+                          onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
+                          onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
+                          {w.ticker} ↗
+                        </a>
+                        {scoreData?.label && (
+                          <span style={{ fontSize: 11, color: gradeColor(scoreData.rating), background: `${gradeColor(scoreData.rating)}22`, padding: "2px 7px", borderRadius: 4, fontWeight: 700 }}>
+                            {scoreData.label}
+                          </span>
+                        )}
+                      </div>
+                      {w.sector && <div style={{ fontSize: 13, color: "#555", marginTop: 2 }}>{w.sector}</div>}
+                    </div>
+                  </div>
+                  <button onClick={() => removeTicker(w.ticker)}
+                    style={{ background: "none", border: "1px solid #2a1a1a", borderRadius: 4, color: "#ff4444", cursor: "pointer", padding: "4px 12px", fontSize: 13 }}>
+                    Remove
+                  </button>
                 </div>
-                <button onClick={() => removeTicker(w.ticker)}
-                  style={{ background: "none", border: "1px solid #2a1a1a", borderRadius: 4, color: "#ff4444", cursor: "pointer", padding: "4px 12px", fontSize: 13 }}>
-                  Remove
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
