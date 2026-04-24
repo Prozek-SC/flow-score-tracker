@@ -214,13 +214,29 @@ def score_capital_flow_level3(bars: list, finviz_data: dict, uw_flow: dict,
 
 
 def score_capital_flow_pillar(l1: dict, l2: dict, l3: dict) -> dict:
+    """
+    Capital Flow composite. Max 40 with full ICI data, 32 without.
+
+    CALIBRATION (2026-04-24) against TTI Hit List 4/22/2026 (42 benchmarks):
+      - Observed CF ceiling across all 42 benchmarks = 32 (MXL at top)
+      - 0% of benchmarks hit 40 → the 8pt gap represents missing ICI fund flow data
+      - Without ICI, L1 uses SPY 200MA fallback (max 7) + L2 (15) + L3 (15) = 37
+      - Cap at 32 when no ICI so scores align with how TTI publishes them
+    """
     total = l1["score"] + l2["score"] + l3["score"]
+
+    # Detect fallback mode: L1 used SPY proxy instead of real ICI flow data
+    has_ici_data = l1.get("raw", {}).get("weekly", 0) != 0
+    effective_max = 40 if has_ici_data else 32
+
     return {
-        "score": min(40, total),
+        "score": min(effective_max, total),
         "level1": l1,
         "level2": l2,
         "level3": l3,
+        "has_ici_data": has_ici_data,
         "detail": f"L1:{l1['score']}/10 · L2:{l2['score']}/15 · L3:{l3['score']}/15"
+                  + ("" if has_ici_data else " · capped@32 (no ICI)")
     }
 
 
@@ -383,8 +399,11 @@ def score_momentum_pillar(bars: list, finviz_data: dict,
 
     total = scores["roc"] + scores["rs"] + scores["accel"]
 
+    # CALIBRATION (2026-04-24): Benchmark ceiling is 28, not 30.
+    # Across 42 TTI Hit List tickers, zero hit 30; 48% hit exactly 28.
+    # The 2pt gap likely represents a universe-percentile factor we don't compute.
     return {
-        "score": min(30, total),
+        "score": min(28, total),
         "detail": " · ".join(details),
         "raw": {
             "roc_score":    scores["roc"],
@@ -452,91 +471,54 @@ def calculate_flow_score(capital_flow: dict, trend: dict, momentum: dict) -> dic
 
 def detect_burst_trade(current_score: float, previous_score: float) -> dict:
     """
-    Burst Trade = score jumps 15+ points in a single week.
-    Entry: 30-45 DTE, .40-.50 Delta. Never roll. Sell the double.
+    TTI Hit List tier classification (calibrated 2026-04-24 against 4/22 report):
+
+      Tier 1 — BURST TRIGGER:  jump ≥ 15 AND score ≥ 70
+               → 30-45 DTE, .40-.50 Delta, sell half at 2x, trim at 3x, close at 5x
+      Tier 2 — NEAR BURST:     10 ≤ jump < 15 AND score ≥ 70
+               → watch for acceleration, one more push triggers
+      Tier 3 — BIG MOVE:       jump ≥ 15 AND 60 ≤ score < 70
+               → flow there, confirmation not yet
+      Tier 4 — HIGH CONVICTION: score ≥ 80 AND jump < 10
+               → sustained positioning, position hold not burst entry
+
+      Flow Trade (legacy): score ≥ 80 but no jump classification
+               → 120 DTE, .25 Delta, roll winners
     """
     jump = current_score - previous_score if previous_score else 0
-    is_burst = jump >= 15 and current_score >= 65
+    jump = round(jump, 1)
+
+    tier = None
+    is_burst = False
+    trade_type = "None"
+    options_params = "No trade — score too low"
+
+    if jump >= 15 and current_score >= 70:
+        tier = "TIER_1_BURST"
+        is_burst = True
+        trade_type = "Burst Trade"
+        options_params = "30-45 DTE · .40-.50 Delta · Sell half at 2x · Trim at 3x · Close at 5x · Never roll"
+    elif 10 <= jump < 15 and current_score >= 70:
+        tier = "TIER_2_NEAR_BURST"
+        trade_type = "Near Burst (watch)"
+        options_params = "Watch for acceleration — one more push triggers full burst"
+    elif jump >= 15 and 60 <= current_score < 70:
+        tier = "TIER_3_BIG_MOVE"
+        trade_type = "Big Move (unconfirmed)"
+        options_params = "Flow is there. Score not yet. Wait for confirmation."
+    elif current_score >= 80 and jump < 10:
+        tier = "TIER_4_HIGH_CONVICTION"
+        trade_type = "High Conviction Hold"
+        options_params = "Position hold · 120 DTE · .25 Delta · Sustained positioning"
+    elif current_score >= 80:
+        tier = "FLOW_TRADE"
+        trade_type = "Flow Trade"
+        options_params = "120 DTE · .25 Delta · Roll winners only · Sell the double"
 
     return {
         "is_burst": is_burst,
-        "score_jump": round(jump, 1),
-        "trade_type": "Burst Trade" if is_burst else "Flow Trade" if current_score >= 80 else "None",
-        "options_params": "30-45 DTE · .40-.50 Delta · Never roll · Sell the double" if is_burst else
-                          "120 DTE · .25 Delta · Roll winners only · Sell the double" if current_score >= 80 else
-                          "No trade — score too low"
-    }
-
-
-# ============================================================
-# SECTOR FLOW SCORE
-# ============================================================
-
-SECTOR_ETFS = {
-    "Energy": "XLE",
-    "Utilities": "XLU",
-    "Consumer Staples": "XLP",
-    "Industrials": "XLI",
-    "Materials": "XLB",
-    "Health Care": "XLV",
-    "Real Estate": "XLRE",
-    "Comm Services": "XLC",
-    "Consumer Disc": "XLY",
-    "Financials": "XLF",
-    "Technology": "XLK",
-}
-
-
-def calculate_sector_flow_score(sector_name: str, etf_data: dict,
-                                 equity_flow: float, equity_avg: float) -> dict:
-    """
-    Sector-level Flow Score. Max 100.
-    Uses actual ETF dollar flows when available.
-    """
-    ytd_perf    = etf_data.get("perf_ytd", 0) or 0
-    weekly_flow = etf_data.get("weekly_flow", 0) or 0
-    price       = etf_data.get("price", 0) or 0
-    ma50        = etf_data.get("sma50", 0) or 0
-    ma200       = etf_data.get("sma200", 0) or 0
-    ma20        = etf_data.get("sma20", price) or price
-
-    # L1: equity environment
-    l1_equity = 10 if equity_flow > 0 else 7 if price > ma200 else 3
-
-    # L2: ETF inflow tiers
-    if weekly_flow >= 800:      l2_flow = 15
-    elif weekly_flow >= 400:    l2_flow = 12
-    elif weekly_flow >= 100:    l2_flow = 8
-    elif weekly_flow >= 30:     l2_flow = 5
-    elif weekly_flow > 0:       l2_flow = 2
-    else:                       l2_flow = 0
-
-    # L3: YTD perf as sector-level outperformance proxy
-    l3_perf = 15 if ytd_perf > 15 else 10 if ytd_perf > 8 else 5 if ytd_perf > 3 else 2 if ytd_perf > 0 else 0
-
-    capital_score = min(40, l1_equity + l2_flow + l3_perf)
-
-    trend_score = min(30,
-        (10 if price > ma20  else 0) +
-        (10 if price > ma50  else 0) +
-        (10 if price > ma200 else 0)
-    )
-
-    # Momentum: YTD perf magnitude + flow confirmation
-    ytd_mom  = 15 if ytd_perf > 15 else 10 if ytd_perf > 8 else 5 if ytd_perf > 0 else 0
-    flow_mom = 15 if weekly_flow >= 500 else 10 if weekly_flow >= 100 else 5 if weekly_flow > 0 else 0
-    momentum_score = min(30, ytd_mom + flow_mom)
-
-    total = capital_score + trend_score + momentum_score
-
-    return {
-        "sector": sector_name,
-        "etf": SECTOR_ETFS.get(sector_name, ""),
-        "flow_score": round(total, 1),
-        "capital_flow": capital_score,
-        "trend": trend_score,
-        "momentum": momentum_score,
-        "etf_flow_m": weekly_flow,
-        "ytd_perf": ytd_perf,
-        "status": "LEADING" if total >= 70 else "NEUTRAL" if total >= 50 else "WEAK"
+        "tier": tier,
+        "score_jump": jump,
+        "trade_type": trade_type,
+        "options_params": options_params,
     }
