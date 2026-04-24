@@ -1,4 +1,4 @@
-""
+""" 
 Flow Score Scoring Engine
 Three Pillars: Capital Flow (40pts) | Trend (30pts) | Momentum (30pts)
 Total: 0-100
@@ -10,7 +10,7 @@ REBUILD (2026-03-17):
        (matches document: "CVX outperforming XLE, SPY over last 63 days = +13/15")
 - Momentum: Rebuilt to 3-component structure matching document exactly:
        Rate of Change (0-10) | Relative Strength (0-10) | Acceleration (0-10)
-""
+"""
 import numpy as np
 from datetime import datetime
 
