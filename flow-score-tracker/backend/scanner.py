@@ -1,4 +1,4 @@
-""" 
+"""
 Market Scanner — TradingView Screener API
 - Top 3 sectors: sector ETF price above 200MA, ranked by distance from 200MA
 - Top 25 stocks per sector: ranked by RS vs sector ETF (3M)
@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from supabase import create_client
 from tradingview_screener import Query, col
 from data_clients import FinvizClient
+from scoring_engine import detect_burst_trade
 
 load_dotenv()
 
@@ -666,27 +667,75 @@ def run_scanner() -> dict:
         all_tickers += [s["ticker"] for s in big_blue_sky]
         all_tickers = list(set(all_tickers))
         if all_tickers:
-            rows = sb.table("weekly_scores").select("ticker, flow_score, rating").in_("ticker", all_tickers).execute()
+            rows = sb.table("weekly_scores").select(
+                "ticker, flow_score, rating, prev_score, score_jump"
+            ).in_("ticker", all_tickers).execute()
             for row in (rows.data or []):
                 score_map[row["ticker"]] = {
                     "flow_score": row.get("flow_score"),
                     "rating": row.get("rating"),
+                    "prev_score": row.get("prev_score"),
+                    "score_jump": row.get("score_jump"),
                 }
         print(f"  Found scores for {len(score_map)} tickers")
     except Exception as e:
         print(f"  Score fetch error: {e}")
 
-    # Merge scores
-    for sector in sector_stocks:
-        for stock in sector_stocks[sector]:
-            s = score_map.get(stock["ticker"], {})
-            stock["flow_score"] = s.get("flow_score")
-            stock["rating"] = s.get("rating")
-
-    for stock in big_blue_sky:
+    # ── TIER CLASSIFICATION (TTI Hit List overlay) ──
+    # Run detect_burst_trade on each scored stock to tag T1/T2/T3/T4
+    def _apply_tier(stock):
         s = score_map.get(stock["ticker"], {})
         stock["flow_score"] = s.get("flow_score")
         stock["rating"] = s.get("rating")
+        stock["prev_score"] = s.get("prev_score")
+        stock["score_jump"] = s.get("score_jump")
+        if s.get("flow_score") is not None and s.get("prev_score") is not None:
+            tier_info = detect_burst_trade(s["flow_score"], s["prev_score"])
+            stock["tier"] = tier_info["tier"]
+            stock["trade_type"] = tier_info["trade_type"]
+            stock["options_params"] = tier_info["options_params"]
+            stock["is_burst"] = tier_info["is_burst"]
+        else:
+            stock["tier"] = None
+            stock["trade_type"] = None
+            stock["options_params"] = None
+            stock["is_burst"] = False
+        return stock
+
+    # Merge scores + tier into sector stocks and big blue sky
+    for sector in sector_stocks:
+        sector_stocks[sector] = [_apply_tier(s) for s in sector_stocks[sector]]
+
+    big_blue_sky = [_apply_tier(s) for s in big_blue_sky]
+
+    # ── BUILD TIERED HIT LIST (matches TTI report structure) ──
+    all_scored = []
+    for sector_list in sector_stocks.values():
+        all_scored.extend(sector_list)
+    all_scored.extend(big_blue_sky)
+
+    # Dedupe by ticker (stock may appear in both sector and big_blue_sky)
+    seen = set()
+    unique_scored = []
+    for s in all_scored:
+        if s["ticker"] not in seen and s.get("flow_score") is not None:
+            seen.add(s["ticker"])
+            unique_scored.append(s)
+
+    hit_list = {
+        "tier_1_burst":          sorted([s for s in unique_scored if s.get("tier") == "TIER_1_BURST"],
+                                        key=lambda x: (-(x.get("score_jump") or 0), -(x.get("flow_score") or 0))),
+        "tier_2_near_burst":     sorted([s for s in unique_scored if s.get("tier") == "TIER_2_NEAR_BURST"],
+                                        key=lambda x: -(x.get("flow_score") or 0)),
+        "tier_3_big_move":       sorted([s for s in unique_scored if s.get("tier") == "TIER_3_BIG_MOVE"],
+                                        key=lambda x: -(x.get("score_jump") or 0)),
+        "tier_4_high_conviction": sorted([s for s in unique_scored if s.get("tier") == "TIER_4_HIGH_CONVICTION"],
+                                         key=lambda x: -(x.get("flow_score") or 0)),
+    }
+    print(f"  Hit List overlay: T1={len(hit_list['tier_1_burst'])} · "
+          f"T2={len(hit_list['tier_2_near_burst'])} · "
+          f"T3={len(hit_list['tier_3_big_move'])} · "
+          f"T4={len(hit_list['tier_4_high_conviction'])}")
 
     output = clean_nans({
         "run_date": date.today().isoformat(),
@@ -697,6 +746,7 @@ def run_scanner() -> dict:
         "sector_stocks": sector_stocks,
         "big_blue_sky": big_blue_sky,
         "unusual_activity": unusual,
+        "hit_list": hit_list,
     })
 
     try:
