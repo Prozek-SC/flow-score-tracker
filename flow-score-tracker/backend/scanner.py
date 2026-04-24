@@ -1,9 +1,9 @@
-"""
+""
 Market Scanner — TradingView Screener API
 - Top 3 sectors: sector ETF price above 200MA, ranked by distance from 200MA
 - Top 25 stocks per sector: ranked by RS vs sector ETF (3M)
 - Unusual options activity: volume/OI ratio spike
-"""
+""
 import os
 import json
 import math
