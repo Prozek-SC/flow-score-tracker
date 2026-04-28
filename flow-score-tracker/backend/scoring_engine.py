@@ -522,3 +522,69 @@ def detect_burst_trade(current_score: float, previous_score: float) -> dict:
         "trade_type": trade_type,
         "options_params": options_params,
     }
+
+
+SECTOR_ETFS = {
+    "Energy": "XLE",
+    "Utilities": "XLU",
+    "Consumer Staples": "XLP",
+    "Industrials": "XLI",
+    "Materials": "XLB",
+    "Health Care": "XLV",
+    "Real Estate": "XLRE",
+    "Comm Services": "XLC",
+    "Consumer Disc": "XLY",
+    "Financials": "XLF",
+    "Technology": "XLK",
+}
+
+
+def calculate_sector_flow_score(sector_name: str, etf_data: dict,
+                                 equity_flow: float, equity_avg: float) -> dict:
+    """
+    Sector-level Flow Score. Max 100.
+    Uses actual ETF dollar flows when available.
+    """
+    ytd_perf    = etf_data.get("perf_ytd", 0) or 0
+    weekly_flow = etf_data.get("weekly_flow", 0) or 0
+    price       = etf_data.get("price", 0) or 0
+    ma50        = etf_data.get("sma50", 0) or 0
+    ma200       = etf_data.get("sma200", 0) or 0
+    ma20        = etf_data.get("sma20", price) or price
+
+    l1_equity = 10 if equity_flow > 0 else 7 if price > ma200 else 3
+
+    if weekly_flow >= 800:      l2_flow = 15
+    elif weekly_flow >= 400:    l2_flow = 12
+    elif weekly_flow >= 100:    l2_flow = 8
+    elif weekly_flow >= 30:     l2_flow = 5
+    elif weekly_flow > 0:       l2_flow = 2
+    else:                       l2_flow = 0
+
+    l3_perf = 15 if ytd_perf > 15 else 10 if ytd_perf > 8 else 5 if ytd_perf > 3 else 2 if ytd_perf > 0 else 0
+
+    capital_score = min(40, l1_equity + l2_flow + l3_perf)
+
+    trend_score = min(30,
+        (10 if price > ma20  else 0) +
+        (10 if price > ma50  else 0) +
+        (10 if price > ma200 else 0)
+    )
+
+    ytd_mom  = 15 if ytd_perf > 15 else 10 if ytd_perf > 8 else 5 if ytd_perf > 0 else 0
+    flow_mom = 15 if weekly_flow >= 500 else 10 if weekly_flow >= 100 else 5 if weekly_flow > 0 else 0
+    momentum_score = min(30, ytd_mom + flow_mom)
+
+    total = capital_score + trend_score + momentum_score
+
+    return {
+        "sector": sector_name,
+        "etf": SECTOR_ETFS.get(sector_name, ""),
+        "flow_score": round(total, 1),
+        "capital_flow": capital_score,
+        "trend": trend_score,
+        "momentum": momentum_score,
+        "etf_flow_m": weekly_flow,
+        "ytd_perf": ytd_perf,
+        "status": "LEADING" if total >= 70 else "NEUTRAL" if total >= 50 else "WEAK"
+    }
