@@ -578,7 +578,7 @@ def seed_hitlist():
                 sb2.table("weekly_scores").upsert({
                     "ticker": ticker, "date": PREV_DATE,
                     "flow_score": prev,
-                    "rev_score": None, "prev_score": None, "score_jump": None,
+                    "rev_score": None,
                     "rating": prev_rating, "label": prev_label, "action": prev_action,
                     "price": price, "sector": sector,
                     "pillars": json.dumps({}),
@@ -595,8 +595,7 @@ def seed_hitlist():
                 sb2.table("weekly_scores").upsert({
                     "ticker": ticker, "date": CURRENT_DATE,
                     "flow_score": score,
-                    "rev_score": prev, "prev_score": prev,
-                    "score_jump": burst["score_jump"],
+                    "rev_score": prev,
                     "rating": rating, "label": label, "action": action,
                     "price": price, "sector": sector,
                     "pillars": pillars_curr,
