@@ -616,8 +616,6 @@ def save_weekly_score(sb, ticker: str, result: dict):
         "ticker": ticker,
         "date": result.get("date", date.today().isoformat()),
         "flow_score": result.get("flow_score", 0),
-        "rev_score": result.get("prev_score"),        # previous week's score
-        "score_jump": result.get("burst", {}).get("score_jump"),  # week-over-week jump
         "rating": result.get("rating", ""),
         "label": result.get("label", ""),
         "action": result.get("action", ""),
