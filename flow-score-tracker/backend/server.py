@@ -470,6 +470,158 @@ def backfill_scores():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/api/admin/seed-hitlist", methods=["POST"])
+def seed_hitlist():
+    """
+    One-time seed: loads TTI Hit List 2026-04-22 into weekly_scores.
+    Inserts April-14 (prev) and April-21 (current) rows for all 42 names,
+    and adds each ticker to the watchlist if not already present.
+    Safe to re-run (upsert on ticker,date).
+    """
+    try:
+        import traceback as _tb
+        from scoring_engine import detect_burst_trade as _dbt
+
+        CURRENT_DATE = "2026-04-21"
+        PREV_DATE    = "2026-04-14"
+
+        HIT_LIST = [
+            # Tier 1 — Burst Triggers
+            {"ticker": "NVTS", "score": 88, "cf": 30, "trend": 30, "mom": 28, "prev": 49, "sector": "Technology",     "price": 16.89,   "tier": 1},
+            {"ticker": "VICR", "score": 86, "cf": 28, "trend": 30, "mom": 28, "prev": 67, "sector": "Technology",     "price": 259.67,  "tier": 1},
+            {"ticker": "NN",   "score": 84, "cf": 27, "trend": 30, "mom": 27, "prev": 42, "sector": "Industrials",    "price": 22.68,   "tier": 1},
+            {"ticker": "UMC",  "score": 83, "cf": 28, "trend": 30, "mom": 25, "prev": 61, "sector": "Technology",     "price": 12.61,   "tier": 1},
+            {"ticker": "SMTC", "score": 82, "cf": 24, "trend": 30, "mom": 28, "prev": 62, "sector": "Technology",     "price": 106.06,  "tier": 1},
+            {"ticker": "BE",   "score": 81, "cf": 23, "trend": 30, "mom": 28, "prev": 52, "sector": "Energy",         "price": 228.50,  "tier": 1},
+            {"ticker": "USAR", "score": 81, "cf": 29, "trend": 26, "mom": 26, "prev": 36, "sector": "Materials",      "price": 24.05,   "tier": 1},
+            {"ticker": "TWLO", "score": 80, "cf": 24, "trend": 30, "mom": 26, "prev": 39, "sector": "Technology",     "price": 153.41,  "tier": 1},
+            {"ticker": "NVDA", "score": 76, "cf": 22, "trend": 30, "mom": 24, "prev": 56, "sector": "Semiconductors", "price": 201.08,  "tier": 1},
+            {"ticker": "RKLB", "score": 73, "cf": 23, "trend": 30, "mom": 20, "prev": 52, "sector": "Industrials",    "price": 89.69,   "tier": 1},
+            {"ticker": "ABNB", "score": 70, "cf": 18, "trend": 30, "mom": 22, "prev": 43, "sector": "Consumer Disc",  "price": 146.50,  "tier": 1},
+            {"ticker": "AAPL", "score": 70, "cf": 24, "trend": 25, "mom": 21, "prev": 52, "sector": "Tech Hardware",  "price": 267.47,  "tier": 1},
+            # Tier 2 — Near Burst
+            {"ticker": "MXL",  "score": 90, "cf": 32, "trend": 30, "mom": 28, "prev": 78, "sector": "Technology",     "price": 33.31,   "tier": 2},
+            {"ticker": "AMKR", "score": 86, "cf": 28, "trend": 30, "mom": 28, "prev": 76, "sector": "Technology",     "price": 71.47,   "tier": 2},
+            {"ticker": "GFS",  "score": 86, "cf": 28, "trend": 30, "mom": 28, "prev": 73, "sector": "Technology",     "price": 59.44,   "tier": 2},
+            {"ticker": "ON",   "score": 85, "cf": 27, "trend": 30, "mom": 28, "prev": 72, "sector": "Semiconductors", "price": 85.86,   "tier": 2},
+            {"ticker": "PLUG", "score": 83, "cf": 25, "trend": 30, "mom": 28, "prev": 70, "sector": "Energy",         "price": 3.10,    "tier": 2},
+            {"ticker": "ICHR", "score": 82, "cf": 24, "trend": 30, "mom": 28, "prev": 70, "sector": "Technology",     "price": 65.10,   "tier": 2},
+            {"ticker": "IAC",  "score": 81, "cf": 26, "trend": 30, "mom": 25, "prev": 70, "sector": "Technology",     "price": 45.14,   "tier": 2},
+            {"ticker": "SIMO", "score": 81, "cf": 26, "trend": 30, "mom": 25, "prev": 67, "sector": "Technology",     "price": 142.62,  "tier": 2},
+            {"ticker": "VFC",  "score": 80, "cf": 25, "trend": 30, "mom": 25, "prev": 68, "sector": "Industrials",    "price": 21.72,   "tier": 2},
+            {"ticker": "HG",   "score": 80, "cf": 25, "trend": 30, "mom": 25, "prev": 70, "sector": "Financials",     "price": 32.55,   "tier": 2},
+            # Tier 3 — Big Moves, Not There Yet
+            {"ticker": "ALGN", "score": 69, "cf": 18, "trend": 26, "mom": 25, "prev": 46, "sector": "Health Care",    "price": 197.28,  "tier": 3},
+            {"ticker": "QXO",  "score": 69, "cf": 20, "trend": 29, "mom": 20, "prev": 53, "sector": "Consumer Disc",  "price": 23.31,   "tier": 3},
+            {"ticker": "BALL", "score": 69, "cf": 18, "trend": 28, "mom": 23, "prev": 52, "sector": "Materials",      "price": 64.46,   "tier": 3},
+            {"ticker": "JOE",  "score": 69, "cf": 19, "trend": 29, "mom": 21, "prev": 47, "sector": "Real Estate",    "price": 69.71,   "tier": 3},
+            {"ticker": "IREN", "score": 69, "cf": 24, "trend": 30, "mom": 15, "prev": 41, "sector": "Technology",     "price": 47.01,   "tier": 3},
+            {"ticker": "DAVE", "score": 68, "cf": 25, "trend": 15, "mom": 28, "prev": 31, "sector": "Financials",     "price": 274.55,  "tier": 3},
+            {"ticker": "AUR",  "score": 68, "cf": 28, "trend": 15, "mom": 25, "prev": 36, "sector": "Technology",     "price": 5.30,    "tier": 3},
+            {"ticker": "BEN",  "score": 68, "cf": 18, "trend": 26, "mom": 24, "prev": 48, "sector": "Financials",     "price": 27.63,   "tier": 3},
+            {"ticker": "LNTH", "score": 68, "cf": 19, "trend": 30, "mom": 19, "prev": 50, "sector": "Health Care",    "price": 82.96,   "tier": 3},
+            {"ticker": "PACS", "score": 67, "cf": 21, "trend": 26, "mom": 20, "prev": 43, "sector": "Health Care",    "price": 36.83,   "tier": 3},
+            # Tier 4 — High Conviction
+            {"ticker": "VSH",  "score": 86, "cf": 28, "trend": 30, "mom": 28, "prev": 81, "sector": "Technology",     "price": 26.80,   "tier": 4},
+            {"ticker": "VECO", "score": 84, "cf": 26, "trend": 30, "mom": 28, "prev": 77, "sector": "Technology",     "price": 48.63,   "tier": 4},
+            {"ticker": "UI",   "score": 84, "cf": 26, "trend": 30, "mom": 28, "prev": 76, "sector": "Technology",     "price": 1044.42, "tier": 4},
+            {"ticker": "STM",  "score": 84, "cf": 26, "trend": 30, "mom": 28, "prev": 75, "sector": "Technology",     "price": 44.38,   "tier": 4},
+            {"ticker": "ACLS", "score": 84, "cf": 26, "trend": 30, "mom": 28, "prev": 77, "sector": "Technology",     "price": 136.15,  "tier": 4},
+            {"ticker": "SYRE", "score": 83, "cf": 25, "trend": 30, "mom": 28, "prev": 76, "sector": "Health Care",    "price": 71.68,   "tier": 4},
+            {"ticker": "AVT",  "score": 83, "cf": 26, "trend": 30, "mom": 27, "prev": 75, "sector": "Technology",     "price": 75.54,   "tier": 4},
+            {"ticker": "NBIS", "score": 82, "cf": 24, "trend": 30, "mom": 28, "prev": 79, "sector": "Technology",     "price": 161.78,  "tier": 4},
+            {"ticker": "VIAV", "score": 82, "cf": 24, "trend": 30, "mom": 28, "prev": 77, "sector": "Technology",     "price": 44.34,   "tier": 4},
+            {"ticker": "LSCC", "score": 82, "cf": 24, "trend": 30, "mom": 28, "prev": 77, "sector": "Technology",     "price": 117.88,  "tier": 4},
+        ]
+
+        def _rating(s):
+            if s >= 85: return ("ELITE",   "Primary Buy",  "Flow Trade: 120 DTE, .25 Delta")
+            if s >= 70: return ("STRONG",  "Strong Setup", "Flow Trade: 120 DTE, .25 Delta")
+            if s >= 50: return ("NEUTRAL", "Watch Only",   "Watchlist only. Wait.")
+            if s >= 30: return ("WEAK",    "Avoid",        "Avoid completely.")
+            return             ("TOXIC",   "Do Not Touch", "Do not touch.")
+
+        sb2 = get_sb()
+        wl_added = prev_rows = curr_rows = 0
+        errors = []
+
+        for item in HIT_LIST:
+            ticker = item["ticker"]
+            sector = item["sector"]
+            score  = item["score"]
+            prev   = item["prev"]
+            price  = item["price"]
+            cf, trend, mom = item["cf"], item["trend"], item["mom"]
+
+            # 1. Watchlist
+            try:
+                sb2.table("watchlist").upsert(
+                    {"ticker": ticker, "sector": sector, "active": True},
+                    on_conflict="ticker"
+                ).execute()
+                wl_added += 1
+            except Exception as e:
+                errors.append(f"wl {ticker}: {str(e)[:80]}")
+
+            burst = _dbt(score, prev)
+            rating, label, action = _rating(score)
+            prev_rating, prev_label, prev_action = _rating(prev)
+
+            pillars_curr = json.dumps({
+                "capital_flow": {"score": cf,    "detail": f"CF {cf}/40 · TTI 2026-04-22"},
+                "trend":        {"score": trend, "detail": f"Trend {trend}/30 · TTI 2026-04-22"},
+                "momentum":     {"score": mom,   "detail": f"Mom {mom}/30 · TTI 2026-04-22"},
+            })
+
+            # 2. April-14 anchor row
+            try:
+                sb2.table("weekly_scores").upsert({
+                    "ticker": ticker, "date": PREV_DATE,
+                    "flow_score": prev,
+                    "rev_score": None, "prev_score": None, "score_jump": None,
+                    "rating": prev_rating, "label": prev_label, "action": prev_action,
+                    "price": price, "sector": sector,
+                    "pillars": json.dumps({}),
+                    "burst": json.dumps({"is_burst": False, "tier": None, "score_jump": 0,
+                                         "trade_type": "None", "options_params": "Seeded Apr-14"}),
+                    "scored_at": f"{PREV_DATE}T00:00:00",
+                }, on_conflict="ticker,date").execute()
+                prev_rows += 1
+            except Exception as e:
+                errors.append(f"prev {ticker}: {str(e)[:80]}")
+
+            # 3. April-21 current row
+            try:
+                sb2.table("weekly_scores").upsert({
+                    "ticker": ticker, "date": CURRENT_DATE,
+                    "flow_score": score,
+                    "rev_score": prev, "prev_score": prev,
+                    "score_jump": burst["score_jump"],
+                    "rating": rating, "label": label, "action": action,
+                    "price": price, "sector": sector,
+                    "pillars": pillars_curr,
+                    "burst": json.dumps(burst),
+                    "scored_at": f"{CURRENT_DATE}T00:00:00",
+                }, on_conflict="ticker,date").execute()
+                curr_rows += 1
+            except Exception as e:
+                errors.append(f"curr {ticker}: {str(e)[:80]}")
+
+        return jsonify({
+            "status":    "done",
+            "tickers":   len(HIT_LIST),
+            "watchlist": wl_added,
+            "prev_rows": prev_rows,
+            "curr_rows": curr_rows,
+            "errors":    errors,
+            "source":    "TTI Hit List 2026-04-22 (scores as of Apr 21)",
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/api/scores/daily-run", methods=["POST"])
 def trigger_daily_score():
     """Manually trigger daily trend score."""
