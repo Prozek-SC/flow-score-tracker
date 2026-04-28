@@ -561,7 +561,7 @@ def seed_hitlist():
                 ).execute()
                 wl_added += 1
             except Exception as e:
-                errors.append(f"wl {ticker}: {str(e)[:80]}")
+                errors.append(f"wl {ticker}: {str(e)[:200]}")
 
             burst = _dbt(score, prev)
             rating, label, action = _rating(score)
@@ -588,7 +588,7 @@ def seed_hitlist():
                 }, on_conflict="ticker,date").execute()
                 prev_rows += 1
             except Exception as e:
-                errors.append(f"prev {ticker}: {str(e)[:80]}")
+                errors.append(f"prev {ticker}: {str(e)[:200]}")
 
             # 3. April-21 current row
             try:
@@ -604,7 +604,7 @@ def seed_hitlist():
                 }, on_conflict="ticker,date").execute()
                 curr_rows += 1
             except Exception as e:
-                errors.append(f"curr {ticker}: {str(e)[:80]}")
+                errors.append(f"curr {ticker}: {str(e)[:200]}")
 
         return jsonify({
             "status":    "done",
