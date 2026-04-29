@@ -95,6 +95,7 @@ class FinvizClient:
             resp2 = requests.get(f"{base_url}&v=141", timeout=15)
             resp2.raise_for_status()
             df2 = pd.read_csv(StringIO(resp2.text))
+            print(f"  Finviz v=141 columns: {list(df2.columns)}")
             for _, row in df2.iterrows():
                 ticker = str(row.get("Ticker", "")).strip()
                 if not ticker or ticker not in result:

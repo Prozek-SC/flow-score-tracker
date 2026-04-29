@@ -97,7 +97,7 @@ def get_nearest_expiration() -> str:
 # STEP 1: SECTOR ETF 200MA RANKING
 # ============================================================
 
-def get_top_sectors(top_n: int = 3):
+def get_top_sectors(top_n: int = 4):
     etf_tickers = list(SECTOR_ETFS.values())
 
     _, df = (Query()
@@ -134,7 +134,37 @@ def get_top_sectors(top_n: int = 3):
             "perf_1m": round(perf_1m, 2),
         })
 
-    sectors.sort(key=lambda x: (not x["above_200ma"], -x["pct_from_200ma"]))
+    # ── Ranking: stored sector flow scores (primary) or composite fallback ──
+    # Stored scores (from weekly pipeline) capture actual CF + Trend + Momentum.
+    # Pure 200MA-distance ranking misses rotation: Cons Disc had 156 names at 70+
+    # while XLY sat below its 200MA distance rank but had surging 1M momentum.
+    flow_map = {}
+    try:
+        sb = get_supabase()
+        rows = sb.table("sector_scores").select("sector,flow_score") \
+            .order("date", desc=True).limit(22).execute()
+        seen = set()
+        for r in (rows.data or []):
+            if r["sector"] not in seen:
+                flow_map[r["sector"]] = r["flow_score"]
+                seen.add(r["sector"])
+    except Exception:
+        pass
+
+    for s in sectors:
+        stored = flow_map.get(s["sector"])
+        if stored is not None:
+            s["selection_score"] = stored
+        else:
+            # Composite fallback: trend (200MA position) + recent rotation (1M perf)
+            # perf_1m weight 1.5: a +5% 1M outperformance adds 7.5 composite pts,
+            # enough to elevate a rotating sector above a stale 200MA leader.
+            trend = s["pct_from_200ma"] if s["above_200ma"] else s["pct_from_200ma"] - 20
+            s["selection_score"] = trend + (s["perf_1m"] * 1.5)
+
+    sectors.sort(key=lambda x: x["selection_score"], reverse=True)
+    source = "flow_score" if flow_map else "composite(200MA+1M)"
+    print(f"  Sector ranking source: {source}")
     return sectors[:top_n], sectors
 
 
@@ -159,7 +189,8 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
             .select(
                 'name', 'description', 'close', 'SMA200', 'SMA50',
                 'Perf.3M', 'Perf.1M', 'Perf.W',
-                'relative_volume_10d_calc', 'market_cap_basic', 'sector',
+                'relative_volume_10d_calc', 'average_volume_10d_calc',
+                'market_cap_basic', 'sector',
                 'High.All', 'short_ratio',
                 '52WeekHigh', 'High.1M'
             )
@@ -188,6 +219,7 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
         perf_1m = safe_float(row.get('Perf.1M'))
         rel_vol = safe_float(row.get('relative_volume_10d_calc'))
         mktcap = safe_float(row.get('market_cap_basic'))
+        avg_vol = safe_float(row.get('average_volume_10d_calc'))
         high_1m = safe_float(row.get('High.1M'))   # 1-month high ≈ 50-day high
 
         # price within 3% of 1-month high (replicates Finviz "0-3% below 50-day high")
@@ -208,6 +240,7 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
             "perf_1m": round(perf_1m, 2),
             "rs_vs_etf": round(perf_3m - etf_perf_3m, 2),
             "rel_vol": round(rel_vol, 2),
+            "adv_m": round(price * avg_vol / 1e6, 1) if avg_vol else None,
             "mktcap_b": round(mktcap / 1e9, 1),
             "scanner": "50day",
         })
@@ -267,6 +300,7 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
         perf_3m = safe_float(row.get('Perf.3M'))
         perf_1m = safe_float(row.get('Perf.1M'))
         rel_vol = safe_float(row.get('relative_volume_10d_calc'))
+        avg_vol = safe_float(row.get('average_volume_10d_calc'))
         mktcap = safe_float(row.get('market_cap_basic'))
         high_1m = safe_float(row.get('High.1M'))
         rsi = safe_float(row.get('RSI'))
@@ -289,6 +323,7 @@ def run_big_blue_sky_scanner(limit: int = 50) -> list:
             "perf_1m": round(perf_1m, 2),
             "rs_vs_etf": round(perf_3m, 2),
             "rel_vol": round(rel_vol, 2),
+            "adv_m": round(price * avg_vol / 1e6, 1) if avg_vol else None,
             "rsi": round(rsi, 1),
             "mktcap_b": round(mktcap / 1e9, 1),
             "scanner": "bigbluesky",
@@ -403,9 +438,31 @@ def get_top_sectors_finviz() -> tuple:
             "perf_1m": d.get("perf_month", 0),
         })
 
-    sectors.sort(key=lambda x: (not x["above_200ma"], -x["pct_from_200ma"]))
+    # Same composite ranking as get_top_sectors: flow score > 200MA+momentum
+    flow_map = {}
+    try:
+        sb = get_supabase()
+        rows = sb.table("sector_scores").select("sector,flow_score") \
+            .order("date", desc=True).limit(22).execute()
+        seen = set()
+        for r in (rows.data or []):
+            if r["sector"] not in seen:
+                flow_map[r["sector"]] = r["flow_score"]
+                seen.add(r["sector"])
+    except Exception:
+        pass
+
+    for s in sectors:
+        stored = flow_map.get(s["sector"])
+        if stored is not None:
+            s["selection_score"] = stored
+        else:
+            trend = s["pct_from_200ma"] if s["above_200ma"] else s["pct_from_200ma"] - 20
+            s["selection_score"] = trend + (s["perf_1m"] * 1.5)
+
+    sectors.sort(key=lambda x: x["selection_score"], reverse=True)
     print(f"  Finviz sector fallback: ranked {len(sectors)} sectors")
-    return sectors[:3], sectors
+    return sectors[:4], sectors
 
 
 def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25) -> list:
@@ -599,7 +656,7 @@ def run_scanner() -> dict:
     # ── 50-DAY BREAKOUT: sector-filtered ──
     print("  Fetching sector ETF data...")
     try:
-        top_sectors, all_sectors = get_top_sectors(top_n=3)
+        top_sectors, all_sectors = get_top_sectors(top_n=4)
     except Exception as e:
         print(f"  Sector fetch error: {e}")
         top_sectors, all_sectors = [], []
@@ -690,7 +747,8 @@ def run_scanner() -> dict:
         stock["prev_score"] = s.get("prev_score")
         stock["score_jump"] = s.get("score_jump")
         if s.get("flow_score") is not None and s.get("prev_score") is not None:
-            tier_info = detect_burst_trade(s["flow_score"], s["prev_score"])
+            tier_info = detect_burst_trade(s["flow_score"], s["prev_score"],
+                                           adv_m=stock.get("adv_m"))
             stock["tier"] = tier_info["tier"]
             stock["trade_type"] = tier_info["trade_type"]
             stock["options_params"] = tier_info["options_params"]

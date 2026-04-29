@@ -17,7 +17,8 @@ from scoring_engine import (
     score_capital_flow_level3, score_capital_flow_pillar,
     score_trend_pillar, score_momentum_pillar,
     calculate_flow_score, detect_burst_trade,
-    calculate_sector_flow_score, SECTOR_ETFS
+    calculate_sector_flow_score, SECTOR_ETFS,
+    score_roc_percentile,
 )
 
 load_dotenv()
@@ -94,16 +95,26 @@ def score_all_sectors(finviz: FinvizClient, _ts_client,
     sector_scores = []
     for sector_name, etf in SECTOR_ETFS.items():
         fv = fv_data.get(etf, {})
+        perf_week = fv.get("perf_week", 0) or 0
+        perf_3m   = fv.get("perf_quarter", 0) or 0
         etf_data = {
-            "price": fv.get("price", 0),
-            "sma50": fv.get("sma50", 0),
-            "sma200": fv.get("sma200", 0),
-            "sma20": fv.get("price", 0),  # approximate
-            "perf_ytd": fv.get("perf_year", 0),  # 1-year perf as YTD proxy
-            "perf_week": fv.get("perf_week", 0),
-            "weekly_flow": fv.get("relative_volume", 1) * fv.get("avg_volume", 0) * fv.get("price", 0) / 1e6,
+            "price":    fv.get("price", 0),
+            "sma50":    fv.get("sma50", 0),
+            "sma200":   fv.get("sma200", 0),
+            "sma20":    fv.get("price", 0),
+            "perf_ytd": fv.get("perf_year", 0),
+            "perf_week": perf_week,
+            # Weekly flow proxy: use ETF weekly % performance × scale factor.
+            # perf_week direction matches actual net flow direction (rotation-safe).
+            # +3% week → ~$600M implied inflow; -2% → ~-$400M outflow.
+            # Previous proxy (perf_3m * 50) was backwards during rotation weeks
+            # (e.g. Cons Disc: perf_q=-4.6% but massive inflows, 156 names at 70+).
+            "weekly_flow": perf_week * 200,
         }
         result = calculate_sector_flow_score(sector_name, etf_data, equity_flow, equity_avg)
+        # Attach 3M perf for use as sector_perf_63d in stock-level scoring
+        result["perf_3m"]   = perf_3m
+        result["perf_week"] = perf_week
         sector_scores.append(result)
 
     # Sort by flow score descending and assign rank
@@ -194,6 +205,20 @@ def score_tickers(ticker_sector_list: list) -> list:
     spy_ma200 = spy_fv.get("sma200", 0)
     spy_above_200ma = bool(spy_price > spy_ma200) if spy_ma200 else True
 
+    # Build universe perf_quarter list for percentile-based ROC scoring.
+    # This is the key to closing the Momentum gap vs TTI: instead of absolute
+    # thresholds, rank each stock within the batch it's scored alongside.
+    universe_perfs = [
+        fv_batch[t].get("perf_quarter", 0) or 0
+        for t in tickers
+        if t in fv_batch and fv_batch[t].get("perf_quarter") is not None
+    ]
+    print(f"  Universe for ROC percentile: {len(universe_perfs)} stocks "
+          f"(p25={sorted(universe_perfs)[len(universe_perfs)//4]:.1f}% "
+          f"p50={sorted(universe_perfs)[len(universe_perfs)//2]:.1f}% "
+          f"p75={sorted(universe_perfs)[len(universe_perfs)*3//4]:.1f}%)"
+          if len(universe_perfs) >= 4 else "  Universe too small for percentile ROC")
+
     results = []
     for item in ticker_sector_list:
         ticker = item["ticker"]
@@ -221,9 +246,8 @@ def score_tickers(ticker_sector_list: list) -> list:
             sector_perf_63d = 0
             for s in sector_scores:
                 if sector.lower() in s["sector"].lower():
-                    etf_perf_3m = s.get("ytd_perf", 0)
-                    sector_etf_flow = etf_perf_3m * 50  # scale: 10% → $500M proxy
-                    sector_perf_63d = etf_perf_3m
+                    sector_etf_flow = s.get("etf_flow_m", 0)   # perf_week * 200 proxy
+                    sector_perf_63d = s.get("perf_3m", 0)       # actual 3M ETF perf
                     break
 
             l1 = score_capital_flow_level1(equity_weekly, equity_avg, spy_above_200ma)
@@ -233,7 +257,8 @@ def score_tickers(ticker_sector_list: list) -> list:
                                             sector_perf_63d=sector_perf_63d)
             capital_flow = score_capital_flow_pillar(l1, l2, l3)
             trend = score_trend_pillar(price, ma20, ma50, ma200, bars)
-            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_perf_63d)
+            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_perf_63d,
+                                             universe_perfs=universe_perfs)
 
             result = calculate_flow_score(capital_flow, trend, momentum)
             result["ticker"] = ticker
@@ -243,7 +268,8 @@ def score_tickers(ticker_sector_list: list) -> list:
 
             prev = get_previous_score(sb, ticker)
             result["prev_score"] = prev
-            result["burst"] = detect_burst_trade(result["flow_score"], prev)
+            adv_m = round(price * fv.get("avg_volume", 0) / 1e6, 1)
+            result["burst"] = detect_burst_trade(result["flow_score"], prev, adv_m=adv_m)
 
             results.append(result)
             save_weekly_score(sb, ticker, result)
@@ -323,6 +349,36 @@ def run_weekly_flow_score():
     spy_ma200_2 = spy_fv2.get("sma200", 0)
     spy_above_200ma = bool(spy_price2 > spy_ma200_2) if spy_ma200_2 else True
 
+    # Build universe_perfs for percentile ROC.
+    # Watchlist alone is too small (~40 stocks), so augment with perf_quarter
+    # values from the latest scanner run stored in Supabase.
+    watchlist_perfs = [
+        fv_batch[t].get("perf_quarter", 0) or 0
+        for t in tickers
+        if t in fv_batch and fv_batch[t].get("perf_quarter") is not None
+    ]
+    scanner_perfs = []
+    try:
+        scan_row = sb.table("scanner_results").select("results") \
+            .order("run_date", desc=True).limit(1).execute()
+        if scan_row.data:
+            import json as _jj
+            scan_data = _jj.loads(scan_row.data[0]["results"])
+            for sector_stocks in scan_data.get("sector_stocks", {}).values():
+                for s in sector_stocks:
+                    p = s.get("perf_3m")
+                    if p is not None:
+                        scanner_perfs.append(float(p))
+            for s in scan_data.get("big_blue_sky", []):
+                p = s.get("perf_3m")
+                if p is not None:
+                    scanner_perfs.append(float(p))
+    except Exception as e:
+        print(f"  Scanner universe fetch error: {e}")
+    universe_perfs = list(set(watchlist_perfs + scanner_perfs))
+    print(f"  Universe for ROC percentile: {len(universe_perfs)} stocks "
+          f"({len(watchlist_perfs)} watchlist + {len(scanner_perfs)} scanner)")
+
     results = []
     for w in watchlist:
         ticker = w["ticker"]
@@ -355,9 +411,8 @@ def run_weekly_flow_score():
             sector_perf_63d = 0
             for s in sector_scores:
                 if sector.lower() in s["sector"].lower():
-                    etf_perf_3m = s.get("ytd_perf", 0)
-                    sector_etf_flow = etf_perf_3m * 50  # scale: 10% perf → $500M proxy
-                    sector_perf_63d = etf_perf_3m
+                    sector_etf_flow = s.get("etf_flow_m", 0)   # perf_week * 200 proxy
+                    sector_perf_63d = s.get("perf_3m", 0)       # actual 3M ETF perf
                     break
 
             # PILLAR 1: Capital Flow
@@ -371,8 +426,9 @@ def run_weekly_flow_score():
             # PILLAR 2: Trend
             trend = score_trend_pillar(price, ma20, ma50, ma200, bars)
 
-            # PILLAR 3: Momentum
-            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_perf_63d)
+            # PILLAR 3: Momentum — universe_perfs enables percentile-based ROC
+            momentum = score_momentum_pillar(bars, fv, spy_perf_63d, sector_perf_63d,
+                                             universe_perfs=universe_perfs)
 
             # COMPOSITE
             result = calculate_flow_score(capital_flow, trend, momentum)
@@ -384,7 +440,8 @@ def run_weekly_flow_score():
             # Get previous score for burst detection
             prev = get_previous_score(sb, ticker)
             result["prev_score"] = prev
-            burst = detect_burst_trade(result["flow_score"], prev)
+            adv_m = round(price * fv.get("avg_volume", 0) / 1e6, 1)
+            burst = detect_burst_trade(result["flow_score"], prev, adv_m=adv_m)
             result["burst"] = burst
 
             results.append(result)

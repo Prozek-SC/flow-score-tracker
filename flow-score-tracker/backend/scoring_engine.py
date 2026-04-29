@@ -217,11 +217,13 @@ def score_capital_flow_pillar(l1: dict, l2: dict, l3: dict) -> dict:
     """
     Capital Flow composite. Max 40 with full ICI data, 32 without.
 
-    CALIBRATION (2026-04-24) against TTI Hit List 4/22/2026 (42 benchmarks):
-      - Observed CF ceiling across all 42 benchmarks = 32 (MXL at top)
-      - 0% of benchmarks hit 40 → the 8pt gap represents missing ICI fund flow data
+    CALIBRATION — confirmed against two TTI Hit List reports:
+      4/22/2026 (42 benchmarks) and 4/29/2026 (100 benchmarks):
+      - Observed CF ceiling = 32 in both reports (MXL at top both weeks)
+      - 0% of benchmarks hit 40 → the 8pt gap = missing ICI fund flow data
       - Without ICI, L1 uses SPY 200MA fallback (max 7) + L2 (15) + L3 (15) = 37
       - Cap at 32 when no ICI so scores align with how TTI publishes them
+      - CF range observed: 15 (HP, energy driller) to 32 (MXL, sustained leader)
     """
     total = l1["score"] + l2["score"] + l3["score"]
 
@@ -297,8 +299,36 @@ def score_trend_pillar(price: float, ma20: float, ma50: float, ma200: float, bar
 #   Acceleration      (0-10): short-term momentum > medium-term?
 # ============================================================
 
+def score_roc_percentile(perf_quarter: float, universe_perfs: list) -> int:
+    """
+    Percentile-rank perf_quarter within the scored universe (0-10 pts).
+
+    TTI scores ROC as a universe percentile across 3,723 stocks.
+    Our universe is smaller (~200-400 scanner candidates) but filtering
+    already removed weak stocks, so the distribution is comparable.
+
+    Returns None when the universe is too small to rank meaningfully
+    (< 20 stocks) so callers can fall back to absolute thresholds.
+    """
+    valid = [p for p in universe_perfs if p is not None]
+    if len(valid) < 20:
+        return None
+
+    rank = sum(1 for p in valid if p <= perf_quarter)
+    pct  = rank / len(valid) * 100
+
+    if pct >= 90:   return 10
+    elif pct >= 75: return 8
+    elif pct >= 60: return 6
+    elif pct >= 45: return 4
+    elif pct >= 30: return 2
+    elif pct >= 15: return 1
+    else:           return 0
+
+
 def score_momentum_pillar(bars: list, finviz_data: dict,
-                           spy_perf_63d: float, sector_perf_63d: float) -> dict:
+                           spy_perf_63d: float, sector_perf_63d: float,
+                           universe_perfs: list = None) -> dict:
     """
     Momentum: 3 components × 10pts = 30pts max.
     Matches document exactly: ROC | RS | Acceleration.
@@ -316,22 +346,36 @@ def score_momentum_pillar(bars: list, finviz_data: dict,
     perf_half    = finviz_data.get("perf_half", 0) or 0
     perf_year    = finviz_data.get("perf_year", 0) or 0
 
+    # perf_half drives the Acceleration component. If missing (TradingView fallback
+    # often returns 0 for Perf.6M), estimate from year / 2. This is conservative
+    # vs quarter * 2 and avoids overstating acceleration for recent-only movers.
+    if not perf_half and perf_year:
+        perf_half = perf_year / 2
+    elif not perf_half and perf_quarter:
+        perf_half = perf_quarter * 1.5
+
     # -------------------------------------------------------
     # 1. RATE OF CHANGE (0-10)
     # Document: "Percentile ranked across the entire universe"
-    # We approximate with absolute thresholds calibrated to
-    # real market data: top decile stocks run +20-40% per quarter
+    # When universe_perfs is provided (scanner two-pass), use actual
+    # percentile rank within the scored batch.  Falls back to absolute
+    # thresholds when the universe is too small (< 20 stocks) or absent.
     # -------------------------------------------------------
     roc = perf_quarter
-    if roc > 30:      roc_score = 10
-    elif roc > 20:    roc_score = 8
-    elif roc > 12:    roc_score = 6
-    elif roc > 7:     roc_score = 4
-    elif roc > 3:     roc_score = 2
-    elif roc > 0:     roc_score = 1
-    else:             roc_score = 0
+    roc_pct = score_roc_percentile(roc, universe_perfs) if universe_perfs else None
+    if roc_pct is not None:
+        roc_score = roc_pct
+        details.append(f"ROC:{roc:+.1f}% (pct={roc_score}pts)")
+    else:
+        if roc > 30:      roc_score = 10
+        elif roc > 20:    roc_score = 8
+        elif roc > 12:    roc_score = 6
+        elif roc > 7:     roc_score = 4
+        elif roc > 3:     roc_score = 2
+        elif roc > 0:     roc_score = 1
+        else:             roc_score = 0
+        details.append(f"ROC:{roc:+.1f}% (abs={roc_score}pts)")
     scores["roc"] = roc_score
-    details.append(f"ROC:{roc:+.1f}% ({roc_score}pts)")
 
     # -------------------------------------------------------
     # 2. RELATIVE STRENGTH (0-10)
@@ -399,9 +443,10 @@ def score_momentum_pillar(bars: list, finviz_data: dict,
 
     total = scores["roc"] + scores["rs"] + scores["accel"]
 
-    # CALIBRATION (2026-04-24): Benchmark ceiling is 28, not 30.
-    # Across 42 TTI Hit List tickers, zero hit 30; 48% hit exactly 28.
-    # The 2pt gap likely represents a universe-percentile factor we don't compute.
+    # CALIBRATION — confirmed against 4/22 (42 benchmarks) and 4/29 (100 benchmarks):
+    # Zero tickers exceeded 28 in either report; ~50% hit exactly 28 both weeks.
+    # 2pt gap vs the 30pt max = universe-percentile rank factor TTI computes internally.
+    # Range observed: 17 (SBRA, low-momentum REIT) to 28 (ARM, TXN, MXL, most leaders).
     return {
         "score": min(28, total),
         "detail": " · ".join(details),
@@ -469,12 +514,14 @@ def calculate_flow_score(capital_flow: dict, trend: dict, momentum: dict) -> dic
     }
 
 
-def detect_burst_trade(current_score: float, previous_score: float) -> dict:
+def detect_burst_trade(current_score: float, previous_score: float,
+                        adv_m: float = None, iv_pct: float = None) -> dict:
     """
-    TTI Hit List tier classification (calibrated 2026-04-24 against 4/22 report):
+    TTI Hit List tier classification. Confirmed against 4/22 and 4/29 reports.
 
-      Tier 1 — BURST TRIGGER:  jump ≥ 15 AND score ≥ 70
-               → 30-45 DTE, .40-.50 Delta, sell half at 2x, trim at 3x, close at 5x
+      Tier 1 — BURST TRIGGER:  jump ≥ 15 AND score ≥ 70 AND ADV ≥ $5M
+               → 30-45 DTE, .40-.50 Delta (or .60-.70 on IV > 60%), sell half at 2x,
+                 trim at 3x, close at 5x, never roll, no stops
       Tier 2 — NEAR BURST:     10 ≤ jump < 15 AND score ≥ 70
                → watch for acceleration, one more push triggers
       Tier 3 — BIG MOVE:       jump ≥ 15 AND 60 ≤ score < 70
@@ -482,8 +529,10 @@ def detect_burst_trade(current_score: float, previous_score: float) -> dict:
       Tier 4 — HIGH CONVICTION: score ≥ 80 AND jump < 10
                → sustained positioning, position hold not burst entry
 
-      Flow Trade (legacy): score ≥ 80 but no jump classification
-               → 120 DTE, .25 Delta, roll winners
+      adv_m:  Average Daily Dollar Volume in millions. Tier 1 requires ≥ $5M.
+              Pass None to skip check (backwards compatible).
+      iv_pct: Implied Volatility as a percentage (e.g. 75 for 75% IV).
+              High IV (> 60%) → TTI recommends .60-.70 delta for more intrinsic.
     """
     jump = current_score - previous_score if previous_score else 0
     jump = round(jump, 1)
@@ -493,11 +542,25 @@ def detect_burst_trade(current_score: float, previous_score: float) -> dict:
     trade_type = "None"
     options_params = "No trade — score too low"
 
-    if jump >= 15 and current_score >= 70:
+    # ADV check: Tier 1 requires ≥ $5M daily dollar volume (per TTI 4/29 report)
+    adv_qualifies = (adv_m is None) or (adv_m >= 5)
+
+    # Delta target: .60-.70 for high IV names (IV > 60%), else standard .40-.50
+    if iv_pct is not None and iv_pct > 60:
+        delta_target = ".60-.70 Delta (high IV — more intrinsic, less time decay)"
+    else:
+        delta_target = ".40-.50 Delta"
+
+    if jump >= 15 and current_score >= 70 and adv_qualifies:
         tier = "TIER_1_BURST"
         is_burst = True
         trade_type = "Burst Trade"
-        options_params = "30-45 DTE · .40-.50 Delta · Sell half at 2x · Trim at 3x · Close at 5x · Never roll"
+        options_params = (f"30-45 DTE · {delta_target} · "
+                          "Sell half at 2x · Trim at 3x · Close at 5x · Never roll · No stops")
+    elif jump >= 15 and current_score >= 70 and not adv_qualifies:
+        tier = "TIER_1_LOW_LIQ"
+        trade_type = "Burst (low liquidity)"
+        options_params = f"Score/jump qualify but ADV ${adv_m:.1f}M < $5M — too illiquid for standard sizing"
     elif 10 <= jump < 15 and current_score >= 70:
         tier = "TIER_2_NEAR_BURST"
         trade_type = "Near Burst (watch)"
@@ -521,6 +584,8 @@ def detect_burst_trade(current_score: float, previous_score: float) -> dict:
         "score_jump": jump,
         "trade_type": trade_type,
         "options_params": options_params,
+        "adv_m": adv_m,
+        "iv_pct": iv_pct,
     }
 
 
