@@ -797,7 +797,7 @@ def run_scanner() -> dict:
 
     output = clean_nans({
         "run_date": date.today().isoformat(),
-        "run_at": datetime.now().isoformat(),
+        "run_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "data_source": "finviz" if using_finviz else "tradingview",
         "top_sectors": top_sectors,
         "all_sectors": all_sectors,
@@ -811,7 +811,7 @@ def run_scanner() -> dict:
         sb.table("scanner_results").upsert({
             "run_date": date.today().isoformat(),
             "results": json.dumps(output),
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }, on_conflict="run_date").execute()
         print("  Saved to Supabase.")
     except Exception as e:

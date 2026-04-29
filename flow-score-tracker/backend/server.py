@@ -989,7 +989,7 @@ def trigger_scanner():
                 return jsonify({
                     "success": True,
                     "cached": True,
-                    "message": f"Markets closed — showing last scan from {row.get('updated_at', row['run_date'])[:16].replace('T', ' ')}",
+                    "message": f"Markets closed — showing last scan from {row.get('updated_at', row['run_date'])}",
                     "run_date": row["run_date"],
                 })
         except Exception as e:
@@ -1037,7 +1037,7 @@ def trigger_scanner():
                 sb.table("scanner_results").upsert({
                     "run_date": _date.today().isoformat(),
                     "results": _json.dumps(results),
-                    "updated_at": _dt.now().isoformat(),
+                    "updated_at": _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                 }, on_conflict="run_date").execute()
                 print("  Scanner results updated with scores.")
 
@@ -1061,7 +1061,7 @@ def get_scanner_results():
                 "data": data,
                 "run_date": row["run_date"],
                 "is_cached": not trading_day,
-                "cache_notice": None if trading_day else f"Markets closed — showing last scan from {row.get('updated_at', row['run_date'])[:16].replace('T', ' ')}",
+                "cache_notice": None if trading_day else f"Markets closed — showing last scan from {row.get('updated_at', row['run_date'])}",
             })
         return jsonify({"success": False, "message": "No scanner results yet"})
     except Exception as e:

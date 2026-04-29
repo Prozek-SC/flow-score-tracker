@@ -11,6 +11,19 @@ function tvLink(ticker) {
   return `https://www.tradingview.com/chart/?symbol=${ticker}`;
 }
 
+// Server stores naive UTC strings (no Z). Append Z so the browser parses
+// as UTC, then display in Eastern Time.
+function toET(isoStr) {
+  if (!isoStr) return "";
+  const s = (isoStr.endsWith("Z") || isoStr.includes("+")) ? isoStr : isoStr + "Z";
+  return new Date(s).toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit",
+    hour12: true,
+  }) + " ET";
+}
+
 function scoreColor(score) {
   if (score >= 80) return "#00d4aa";
   if (score >= 65) return "#7fff7f";
@@ -444,7 +457,7 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
           <div style={{ fontSize: 13, color: "#888" }}>{scanDesc}</div>
           {lastRun && (
             <div style={{ fontSize: 12, color: "#555", marginTop: 4, display: "flex", alignItems: "center", gap: 8 }}>
-              Last run: {new Date(lastRun).toLocaleString()}
+              Last run: {toET(lastRun)}
               {data?.data_source === "finviz" && (
                 <span style={{ fontSize: 10, background: "#1a1a2e", color: "#7b9fff", border: "1px solid #7b9fff44", borderRadius: 4, padding: "2px 6px", letterSpacing: 1 }}>
                   FINVIZ
@@ -459,7 +472,7 @@ function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), on
           )}
           {cacheNotice && (
             <div style={{ fontSize: 12, color: "#ffd700", marginTop: 6, background: "#1a1500", border: "1px solid #ffd70044", borderRadius: 6, padding: "6px 10px", display: "inline-block" }}>
-              📅 {cacheNotice}
+              📅 {cacheNotice.replace(/\d{4}-\d{2}-\d{2}T[\d:Z+.-]+/, ts => toET(ts))}
             </div>
           )}
           {scanStatus && !cacheNotice && (
