@@ -295,6 +295,61 @@ class TradierOptionsClient:
             "total_unusual": 1 if total > 500 else 0,
         }
 
+    def get_expirations(self, symbol: str) -> list:
+        """All available expiration dates (ISO strings) for a symbol."""
+        if not self.api_key:
+            return []
+        try:
+            resp = requests.get(
+                f"{self.BASE_URL}/markets/options/expirations",
+                headers=self.headers,
+                params={"symbol": symbol, "includeAllRoots": "true"},
+                timeout=6,
+            )
+            if resp.status_code != 200:
+                return []
+            exp = (resp.json().get("expirations") or {}).get("date", []) or []
+            return exp if isinstance(exp, list) else [exp]
+        except Exception as e:
+            print(f"  Tradier expirations error {symbol}: {e}")
+            return []
+
+    def pick_expiration(self, symbol: str, dte_target: int, dte_min: int, dte_max: int) -> str:
+        """Closest available expiration to dte_target within a tolerant window."""
+        from datetime import date
+        today = date.today()
+        best, best_diff = None, 1e9
+        for e in self.get_expirations(symbol):
+            try:
+                dte = (date.fromisoformat(e) - today).days
+            except Exception:
+                continue
+            if dte < dte_min - 10:   # allow some slack below the floor
+                continue
+            diff = abs(dte - dte_target)
+            if diff < best_diff:
+                best, best_diff = e, diff
+        return best
+
+    def get_option_chain(self, symbol: str, expiration: str) -> list:
+        """Full option chain for one expiration, with greeks (delta, IV)."""
+        if not self.api_key:
+            return []
+        try:
+            resp = requests.get(
+                f"{self.BASE_URL}/markets/options/chains",
+                headers=self.headers,
+                params={"symbol": symbol, "expiration": expiration, "greeks": "true"},
+                timeout=8,
+            )
+            if resp.status_code != 200:
+                return []
+            opts = (resp.json().get("options") or {}).get("option", []) or []
+            return opts if isinstance(opts, list) else [opts]
+        except Exception as e:
+            print(f"  Tradier chain error {symbol}: {e}")
+            return []
+
     def _nearest_expiry(self) -> str:
         from datetime import date, timedelta
         d = date.today()

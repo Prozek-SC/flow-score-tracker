@@ -867,6 +867,10 @@ def sector_history():
         by_sector[s].append({
             "week_ending": row["week_ending"],
             "flow_score": row["flow_score"],
+            "capital_flow": row.get("capital_flow", 0),
+            "trend": row.get("trend", 0),
+            "momentum": row.get("momentum", 0),
+            "etf": row.get("etf", ""),
             "status": row["status"],
             "rank": row["rank"],
             "etf_flow_m": row.get("etf_flow_m", 0),
@@ -910,6 +914,61 @@ def burst_trades():
             pass
     bursts.sort(key=lambda x: x.get("burst", {}).get("score_jump", 0), reverse=True)
     return jsonify(bursts)
+
+
+# ============================================================
+# OPTIONS CONTRACT QUALITY
+# ============================================================
+
+@app.route("/api/options/<ticker>")
+def options_quality(ticker):
+    """
+    Grade the best options contract to buy on a ticker, against the TTI options
+    checklist (liquidity, delta fit, IV regime). Picks the trade template from
+    the stock's latest Flow Score + weekly jump, selects the expiration nearest
+    the template DTE, pulls the live chain, and grades the contract at the
+    target delta.
+    """
+    from data_clients import TradierOptionsClient
+    from scoring_engine import (
+        choose_option_template, select_contract, grade_option_contract, OPTION_TEMPLATES,
+    )
+    ticker = ticker.upper()
+    sb = get_sb()
+
+    # Latest score + weekly jump (from the two most recent weekly scores).
+    score, jump = None, 0
+    try:
+        rows = sb.table("weekly_scores").select("flow_score,date") \
+            .eq("ticker", ticker).order("date", desc=True).limit(2).execute()
+        data = rows.data or []
+        if data:
+            score = data[0].get("flow_score")
+            if len(data) >= 2 and data[1].get("flow_score") is not None:
+                jump = round(score - data[1]["flow_score"], 1)
+    except Exception as e:
+        print(f"  options_quality score lookup error {ticker}: {e}")
+
+    tmpl_key = choose_option_template(score, jump)
+    t = OPTION_TEMPLATES[tmpl_key]
+
+    tr = TradierOptionsClient()
+    if not tr.api_key:
+        return jsonify({"ticker": ticker, "error": "TRADIER_API_KEY not configured"}), 503
+
+    exp = tr.pick_expiration(ticker, t["dte_target"], t["dte_min"], t["dte_max"])
+    if not exp:
+        return jsonify({"ticker": ticker, "error": "no suitable expiration found"}), 404
+
+    chain = tr.get_option_chain(ticker, exp)
+    contract = select_contract(chain, t["delta_target"])
+    if not contract:
+        return jsonify({"ticker": ticker, "expiration": exp,
+                        "error": "no call with greeks in chain"}), 404
+
+    graded = grade_option_contract(contract, tmpl_key)
+    graded.update({"ticker": ticker, "flow_score": score, "score_jump": jump, "expiration": exp})
+    return jsonify(graded)
 
 
 # ============================================================

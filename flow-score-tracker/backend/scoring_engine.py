@@ -702,3 +702,119 @@ def calculate_sector_flow_score(sector_name: str, etf_data: dict,
         "ytd_perf": ytd_perf,
         "status": "LEADING" if total >= 70 else "NEUTRAL" if total >= 50 else "WEAK"
     }
+
+
+# ============================================================
+# OPTIONS CONTRACT QUALITY
+# Grade the actual contract to buy against the TTI options checklist:
+# liquidity (OI / volume / spread), delta fit to the trade template, and IV
+# regime. Turns "Flow Score 85" into "85, and the $90 call is an A-grade buy."
+# (Risk/reward vs a 1.618 Fib price target is a follow-up — needs bar data.)
+# ============================================================
+
+OPTION_TEMPLATES = {
+    # Fast burst trade off a fresh score jump.
+    "burst": {"dte_min": 30, "dte_max": 45, "dte_target": 44,
+              "delta_lo": 0.40, "delta_hi": 0.50, "delta_target": 0.45},
+    # Slower swing / flow trade on sustained conviction.
+    "swing": {"dte_min": 60, "dte_max": 90, "dte_target": 75,
+              "delta_lo": 0.20, "delta_hi": 0.30, "delta_target": 0.25},
+}
+
+
+def choose_option_template(flow_score: float, score_jump: float) -> str:
+    """Burst when a fresh 15+ jump fires on a 70+ score; else the swing template."""
+    if score_jump is not None and score_jump >= 15 and (flow_score or 0) >= 70:
+        return "burst"
+    return "swing"
+
+
+def select_contract(chain: list, target_delta: float) -> dict:
+    """Pick the call whose |delta| is closest to target_delta."""
+    best, best_diff = None, 1e9
+    for o in chain:
+        if o.get("option_type") != "call":
+            continue
+        d = (o.get("greeks") or {}).get("delta")
+        if d is None:
+            continue
+        diff = abs(abs(d) - target_delta)
+        if diff < best_diff:
+            best, best_diff = o, diff
+    return best
+
+
+def grade_option_contract(option: dict, template_key: str = "burst") -> dict:
+    """
+    Grade one option contract (Tradier-shaped dict) against the TTI options
+    checklist. Returns grade A-F, the 0-100 score, per-check detail, the
+    contract summary, and an IV-based structure recommendation.
+    """
+    t = OPTION_TEMPLATES.get(template_key, OPTION_TEMPLATES["burst"])
+    g = option.get("greeks") or {}
+    bid = float(option.get("bid") or 0)
+    ask = float(option.get("ask") or 0)
+    mid = round((bid + ask) / 2, 2) if (bid or ask) else float(option.get("last") or 0)
+    oi = int(option.get("open_interest") or 0)
+    vol = int(option.get("volume") or 0)
+    delta = abs(float(g.get("delta") or 0))
+    iv_raw = g.get("mid_iv")
+    iv = round(float(iv_raw) * 100, 1) if iv_raw not in (None, 0) else None
+    spread_pct = round((ask - bid) / mid * 100, 1) if mid else 999.0
+
+    pts = 0
+    checks = []
+    def chk(name, ok, detail):
+        checks.append({"name": name, "pass": bool(ok), "detail": detail})
+
+    # Liquidity — open interest (heaviest: an illiquid contract you can't exit).
+    if   oi >= 1000: pts += 22; chk("Open interest", True,  f"{oi:,} (deep)")
+    elif oi >= 500:  pts += 14; chk("Open interest", True,  f"{oi:,} (ok)")
+    elif oi >= 100:  pts += 6;  chk("Open interest", False, f"{oi:,} (thin)")
+    else:                       chk("Open interest", False, f"{oi:,} (illiquid — hard to exit)")
+
+    # Day volume.
+    if   vol >= 10: pts += 8; chk("Day volume", True,  str(vol))
+    elif vol >= 1:  pts += 4; chk("Day volume", True,  f"{vol} (light)")
+    else:                     chk("Day volume", False, "0 (no trades today)")
+
+    # Bid/ask spread — wide spreads bleed you on entry and exit.
+    if   spread_pct <= 5:  pts += 15; chk("Bid/ask spread", True,  f"{spread_pct}% (tight)")
+    elif spread_pct <= 10: pts += 9;  chk("Bid/ask spread", True,  f"{spread_pct}%")
+    elif spread_pct <= 20: pts += 4;  chk("Bid/ask spread", False, f"{spread_pct}% (wide)")
+    else:                             chk("Bid/ask spread", False, f"{spread_pct}% (very wide — bad fills)")
+
+    # Delta fit to the template band.
+    if   t["delta_lo"] <= delta <= t["delta_hi"]: pts += 25; chk("Delta", True,  f"{delta:.2f} (in band)")
+    elif abs(delta - t["delta_target"]) <= 0.07:  pts += 15; chk("Delta", True,  f"{delta:.2f} (near band)")
+    elif abs(delta - t["delta_target"]) <= 0.12:  pts += 7;  chk("Delta", False, f"{delta:.2f} (off band)")
+    else:                                                    chk("Delta", False, f"{delta:.2f} (wrong strike)")
+
+    # IV regime -> structure recommendation (debit spread vs naked call).
+    rec = None
+    if iv is not None:
+        if iv > 50:
+            rec = f"IV {iv}% is rich — use a call debit spread to limit IV-crush risk"
+            pts += 8; chk("IV regime", True, f"{iv}% (spread)")
+        else:
+            rec = f"IV {iv}% — buy the call outright to capture an IV pop on the breakout"
+            pts += 15; chk("IV regime", True, f"{iv}% (naked)")
+    else:
+        chk("IV regime", False, "no IV data")
+
+    grade = "A" if pts >= 85 else "B" if pts >= 70 else "C" if pts >= 50 else "D" if pts >= 30 else "F"
+    return {
+        "grade": grade,
+        "score": pts,
+        "template": template_key,
+        "recommendation": rec,
+        "contract": {
+            "symbol": option.get("symbol"),
+            "strike": option.get("strike"),
+            "expiration": option.get("expiration_date"),
+            "bid": bid, "ask": ask, "mid": mid, "double": round(mid * 2, 2),
+            "delta": round(delta, 2), "iv": iv,
+            "open_interest": oi, "volume": vol,
+        },
+        "checks": checks,
+    }

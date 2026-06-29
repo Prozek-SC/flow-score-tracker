@@ -6,6 +6,8 @@ __pycache__/
 
 # Node
 node_modules/
+build/
+.eslintcache
 
 # Local TTI report archives (large binary PDFs — not source)
 Flow Reports/
