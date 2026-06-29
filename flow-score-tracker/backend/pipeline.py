@@ -97,7 +97,16 @@ def compute_sector_etf_flows(sb) -> dict:
     etfs = list(SECTOR_ETFS.values())
     today = date.today()
 
-    snaps = EtfFlowClient().get_snapshot(etfs)
+    # Never let a flow-data failure break the weekly run — fall back to the proxy.
+    try:
+        snaps = EtfFlowClient().get_snapshot(etfs)
+    except Exception as e:
+        print(f"  ETF flow snapshot failed ({e}) — using proxy this run")
+        return {}
+    if not snaps:
+        print("  ETF flow snapshot empty — using proxy this run")
+        return {}
+
     for etf, s in snaps.items():
         try:
             sb.table("etf_flow_snapshots").upsert({
