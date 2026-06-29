@@ -247,7 +247,9 @@ class TradierOptionsClient:
     Tradier API client for options flow data.
     Used for unusual activity detection in scanner and scoring.
     """
-    BASE_URL = "https://api.tradier.com/v1"
+    # Production by default; set TRADIER_BASE_URL=https://sandbox.tradier.com/v1
+    # in the env when using a sandbox token.
+    BASE_URL = os.getenv("TRADIER_BASE_URL", "https://api.tradier.com/v1")
 
     def __init__(self):
         self.api_key = os.getenv("TRADIER_API_KEY") or os.getenv("TRADIER_TOKEN")
