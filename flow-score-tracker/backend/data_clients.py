@@ -317,33 +317,39 @@ class TradierOptionsClient:
 
 class EtfFlowClient:
     """
-    Snapshots an ETF's shares-outstanding, NAV and AUM (via yfinance) so the
-    pipeline can compute real creation/redemption flow.
+    Snapshots an ETF's AUM and NAV (via the TradingView screener, already a
+    project dependency) so the pipeline can compute real creation/redemption flow.
 
-    Flow mechanics: when money enters an ETF the issuer creates shares, so
-    net flow = delta(shares_outstanding) * price. Flow/AUM% = delta(shares)/shares.
-    yfinance exposes only CURRENT values for ETFs (no history), so the pipeline
-    persists a weekly snapshot and derives weekly/monthly flow from prior rows.
+    ETFs don't expose a raw share count through the screener, but AUM is well
+    corroborated across sources, so we derive implied shares = AUM / price.
+    Net flow = delta(shares) * price isolates creation/redemption from price
+    appreciation; Flow/AUM% = delta(shares)/shares. yfinance was avoided because
+    its websockets>=13 dependency conflicts with the pinned supabase realtime.
+    History accrues forward (the pipeline persists a weekly snapshot).
     """
 
     def get_snapshot(self, tickers: list) -> dict:
         """Return {ticker: {shares, price, aum}} of current values."""
-        import yfinance as yf
+        from tradingview_screener import Query, col
         out = {}
-        for t in tickers:
+        try:
+            _, df = (Query()
+                .select("name", "close", "aum")
+                .set_markets("america")
+                .where(col("name").isin(list(tickers)))
+                .limit(len(tickers) + 10)
+                .get_scanner_data())
+        except Exception as e:
+            print(f"  ETF snapshot query error: {e}")
+            return out
+        for _, r in df.iterrows():
+            t = str(r["name"]).strip()
             try:
-                info = yf.Ticker(t).info or {}
-                shares = info.get("sharesOutstanding")
-                price = info.get("navPrice") or info.get("previousClose")
-                aum = info.get("totalAssets") or info.get("netAssets")
-                if shares and price:
-                    out[t] = {
-                        "shares": float(shares),
-                        "price": float(price),
-                        "aum": float(aum) if aum else float(shares) * float(price),
-                    }
-                else:
-                    print(f"  ETF snapshot {t}: missing shares/price")
-            except Exception as e:
-                print(f"  ETF snapshot error {t}: {e}")
+                aum = float(r["aum"]); price = float(r["close"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if aum > 0 and price > 0:
+                out[t] = {"shares": aum / price, "price": price, "aum": aum}
+            else:
+                print(f"  ETF snapshot {t}: missing aum/price")
         return out
