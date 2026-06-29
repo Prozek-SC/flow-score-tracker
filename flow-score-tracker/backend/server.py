@@ -920,6 +920,27 @@ def burst_trades():
 # OPTIONS CONTRACT QUALITY
 # ============================================================
 
+@app.route("/api/options-debug/<ticker>")
+def options_debug(ticker):
+    """Temporary: probe Tradier prod + sandbox to find which the key works on."""
+    import os, requests
+    key = os.getenv("TRADIER_API_KEY") or os.getenv("TRADIER_TOKEN")
+    out = {"ticker": ticker.upper(), "key_present": bool(key),
+           "key_prefix": (key[:5] + "…") if key else None}
+    for label, base in [("production", "https://api.tradier.com/v1"),
+                        ("sandbox", "https://sandbox.tradier.com/v1")]:
+        try:
+            r = requests.get(
+                f"{base}/markets/options/expirations",
+                headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+                params={"symbol": ticker.upper()}, timeout=8,
+            )
+            out[label] = {"status": r.status_code, "body": r.text[:180]}
+        except Exception as e:
+            out[label] = {"error": str(e)[:160]}
+    return jsonify(out)
+
+
 @app.route("/api/options/<ticker>")
 def options_quality(ticker):
     """
