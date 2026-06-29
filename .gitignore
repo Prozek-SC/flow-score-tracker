@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.env
+.venv/
+
+# Node
+node_modules/
+
+# Local TTI report archives (large binary PDFs — not source)
+Flow Reports/
+Execution Reports/

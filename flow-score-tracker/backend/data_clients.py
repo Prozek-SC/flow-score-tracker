@@ -309,3 +309,41 @@ class TradierOptionsClient:
             "call_vol": 0, "put_vol": 0, "total_vol": 0,
             "call_pct": 50, "bullish_flow": False, "put_call_ratio": 1.0,
         }
+
+
+# ============================================================
+# ETF FLOW CLIENT — creation/redemption flow via shares outstanding
+# ============================================================
+
+class EtfFlowClient:
+    """
+    Snapshots an ETF's shares-outstanding, NAV and AUM (via yfinance) so the
+    pipeline can compute real creation/redemption flow.
+
+    Flow mechanics: when money enters an ETF the issuer creates shares, so
+    net flow = delta(shares_outstanding) * price. Flow/AUM% = delta(shares)/shares.
+    yfinance exposes only CURRENT values for ETFs (no history), so the pipeline
+    persists a weekly snapshot and derives weekly/monthly flow from prior rows.
+    """
+
+    def get_snapshot(self, tickers: list) -> dict:
+        """Return {ticker: {shares, price, aum}} of current values."""
+        import yfinance as yf
+        out = {}
+        for t in tickers:
+            try:
+                info = yf.Ticker(t).info or {}
+                shares = info.get("sharesOutstanding")
+                price = info.get("navPrice") or info.get("previousClose")
+                aum = info.get("totalAssets") or info.get("netAssets")
+                if shares and price:
+                    out[t] = {
+                        "shares": float(shares),
+                        "price": float(price),
+                        "aum": float(aum) if aum else float(shares) * float(price),
+                    }
+                else:
+                    print(f"  ETF snapshot {t}: missing shares/price")
+            except Exception as e:
+                print(f"  ETF snapshot error {t}: {e}")
+        return out

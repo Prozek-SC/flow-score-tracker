@@ -604,11 +604,65 @@ SECTOR_ETFS = {
 }
 
 
+def score_sector_capital_flow(weekly_flow_m: float,
+                              monthly_flow_m: float = None,
+                              flow_aum_pct: float = None) -> float:
+    """
+    Sector Capital Flow score (0-40), calibrated against 10 weeks of TTI Flow
+    Map reports (see ../TTI_FORMULA_FINDINGS.md).
+
+    Key empirical finding: CF is driven by NORMALIZED flow (Flow/AUM) and flow
+    DIRECTION / ACCELERATION (weekly vs the trailing 4-week trend) — NOT raw
+    dollar volume. The sector pulling the most dollars can post the LOWEST CF,
+    because a big fund's inflow is small relative to its AUM (e.g. XLF took the
+    most $ on 2026-02-28 yet scored the lowest CF). This reproduces that.
+
+    Accuracy vs the reports: absolute MAE ~3 pts, but sector RANK agreement —
+    what actually picks leaders vs laggards — is ~0.83 Spearman / 83% pairwise.
+    Refine the thresholds as more weekly reports are collected.
+
+    weekly_flow_m  : this week's net ETF flow, $M (creation/redemption).
+    monthly_flow_m : trailing 4-week net flow, $M (direction/acceleration).
+                     Falls back to weekly*4 when unknown.
+    flow_aum_pct   : weekly flow as a % of fund AUM (conviction). 0 if unknown.
+    """
+    wk = weekly_flow_m or 0
+    mn = monthly_flow_m if monthly_flow_m is not None else wk * 4
+    aum = flow_aum_pct or 0
+
+    # Base: weekly flow direction and magnitude (the strongest single signal).
+    if   wk <= -700: cf = 11
+    elif wk <= -330: cf = 14
+    elif wk <=  -50: cf = 17
+    elif wk <=   60: cf = 20
+    elif wk <=  366: cf = 22
+    else:            cf = 24
+
+    # Acceleration: is the week running with or against the 4-week trend?
+    # The monthly trend dominates — a single green week can't rescue a sector
+    # whose month is collapsing (e.g. XLE: +$314M week on a -$1.3B month -> CF 9).
+    if   wk > 60 and mn > 500:   cf += 3            # sustained multi-week inflow
+    elif wk > 0  and mn < -800:  cf = min(cf, 12)   # weekly pop vs a collapsing month
+    elif wk > 0  and mn < -13:   cf -= 2            # weekly pop, month still bleeding
+    elif wk < 0  and mn < -150:  cf -= 1            # sustained outflow
+
+    # Conviction: Flow/AUM gates the top scores, but only when the month confirms
+    # (guards a small fund's high-% one-week blip from scoring too hot).
+    if mn > 0:
+        if   aum >= 1.6: cf += 3
+        elif aum >= 1.0: cf += 2
+        elif aum >= 0.4: cf += 1
+    if aum <= -0.4:      cf -= 2
+
+    return float(max(0, min(40, cf)))
+
+
 def calculate_sector_flow_score(sector_name: str, etf_data: dict,
                                  equity_flow: float, equity_avg: float) -> dict:
     """
     Sector-level Flow Score. Max 100.
-    Uses actual ETF dollar flows when available.
+    Capital Flow now uses Flow/AUM-normalized ETF flow (score_sector_capital_flow),
+    calibrated to the TTI Flow Map reports, instead of the old perf_week proxy.
     """
     ytd_perf    = etf_data.get("perf_ytd", 0) or 0
     weekly_flow = etf_data.get("weekly_flow", 0) or 0
@@ -617,18 +671,13 @@ def calculate_sector_flow_score(sector_name: str, etf_data: dict,
     ma200       = etf_data.get("sma200", 0) or 0
     ma20        = etf_data.get("sma20", price) or price
 
-    l1_equity = 10 if equity_flow > 0 else 7 if price > ma200 else 3
-
-    if weekly_flow >= 800:      l2_flow = 15
-    elif weekly_flow >= 400:    l2_flow = 12
-    elif weekly_flow >= 100:    l2_flow = 8
-    elif weekly_flow >= 30:     l2_flow = 5
-    elif weekly_flow > 0:       l2_flow = 2
-    else:                       l2_flow = 0
-
-    l3_perf = 15 if ytd_perf > 15 else 10 if ytd_perf > 8 else 5 if ytd_perf > 3 else 2 if ytd_perf > 0 else 0
-
-    capital_score = min(40, l1_equity + l2_flow + l3_perf)
+    # Capital Flow — Flow/AUM-normalized, calibrated to TTI Flow Maps.
+    # Real ETF creation/redemption flow + 4-week flow + Flow/AUM% drive this once
+    # the pipeline supplies them; until then weekly_flow may be the legacy proxy
+    # and monthly_flow/flow_aum fall back inside score_sector_capital_flow.
+    monthly_flow = etf_data.get("monthly_flow")
+    flow_aum     = etf_data.get("flow_aum")
+    capital_score = score_sector_capital_flow(weekly_flow, monthly_flow, flow_aum)
 
     trend_score = min(30,
         (10 if price > ma20  else 0) +

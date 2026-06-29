@@ -107,8 +107,24 @@ CREATE INDEX IF NOT EXISTS idx_weekly_score ON weekly_scores(flow_score DESC);
 CREATE INDEX IF NOT EXISTS idx_daily_ticker ON daily_prices(ticker);
 CREATE INDEX IF NOT EXISTS idx_sector_date ON sector_scores(date DESC);
 
+-- ETF flow snapshots — weekly shares-outstanding/NAV/AUM per sector ETF.
+-- Real creation/redemption flow is derived from week-over-week deltas of these
+-- rows (net flow = delta(shares) * price; Flow/AUM% = delta(shares)/shares).
+CREATE TABLE IF NOT EXISTS etf_flow_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    etf TEXT NOT NULL,
+    shares DOUBLE PRECISION,
+    price DOUBLE PRECISION,
+    aum DOUBLE PRECISION,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(date, etf)
+);
+CREATE INDEX IF NOT EXISTS idx_etfflow_etf_date ON etf_flow_snapshots(etf, date DESC);
+
 -- RLS
 ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
+ALTER TABLE etf_flow_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE weekly_scores ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_prices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sector_scores ENABLE ROW LEVEL SECURITY;
@@ -121,5 +137,6 @@ CREATE POLICY "service_all" ON weekly_scores FOR ALL USING (true);
 CREATE POLICY "service_all" ON daily_prices FOR ALL USING (true);
 CREATE POLICY "service_all" ON sector_scores FOR ALL USING (true);
 CREATE POLICY "service_all" ON fund_flows FOR ALL USING (true);
+CREATE POLICY "service_all" ON etf_flow_snapshots FOR ALL USING (true);
 CREATE POLICY "service_all" ON flow_leaders FOR ALL USING (true);
 CREATE POLICY "service_all" ON flow_exits FOR ALL USING (true);

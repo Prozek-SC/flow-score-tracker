@@ -81,8 +81,74 @@ def get_ici_fund_flows() -> dict:
 # SECTOR SCORING
 # ============================================================
 
+def compute_sector_etf_flows(sb) -> dict:
+    """
+    Snapshot each sector ETF's shares-outstanding this week and derive real
+    creation/redemption flow from prior snapshots.
+
+    Net flow = delta(shares) * price; Flow/AUM% = delta(shares)/shares. yfinance
+    gives only current values, so history accrues forward — the first runs return
+    zero/None flow (score_sector_capital_flow falls back gracefully) and accuracy
+    arrives once ~4 weeks of snapshots exist.
+
+    Returns {etf: {weekly_flow($M), monthly_flow($M or None), flow_aum(%), aum_b}}.
+    """
+    from data_clients import EtfFlowClient
+    etfs = list(SECTOR_ETFS.values())
+    today = date.today()
+
+    snaps = EtfFlowClient().get_snapshot(etfs)
+    for etf, s in snaps.items():
+        try:
+            sb.table("etf_flow_snapshots").upsert({
+                "date": today.isoformat(), "etf": etf,
+                "shares": s["shares"], "price": s["price"], "aum": s["aum"],
+            }, on_conflict="date,etf").execute()
+        except Exception as e:
+            print(f"  ETF snapshot save error {etf}: {e}")
+
+    # Pull recent history (last ~40 days) and bucket by ETF (ascending date).
+    hist = {}
+    try:
+        cutoff = (today - timedelta(days=40)).isoformat()
+        rows = sb.table("etf_flow_snapshots").select("date,etf,shares,price,aum") \
+            .gte("date", cutoff).order("date", desc=False).execute()
+        for r in (rows.data or []):
+            hist.setdefault(r["etf"], []).append(r)
+    except Exception as e:
+        print(f"  ETF flow history fetch error: {e}")
+
+    flows = {}
+    for etf, s in snaps.items():
+        cur, price, aum = s["shares"], s["price"], s["aum"]
+        rows = hist.get(etf, [])
+
+        def shares_n_days_back(days):
+            target = today - timedelta(days=days)
+            best = None
+            for r in rows:                       # ascending → keep latest on/before target
+                if date.fromisoformat(r["date"]) <= target:
+                    best = r
+            return best["shares"] if best else None
+
+        wk_prev = shares_n_days_back(6)
+        mn_prev = shares_n_days_back(25)
+        flows[etf] = {
+            # None (not 0) when no prior snapshot exists, so the scorer falls back
+            # to the proxy instead of flat-lining CF during the first ~4 weeks.
+            "weekly_flow":  round((cur - wk_prev) * price / 1e6, 1) if wk_prev else None,
+            "monthly_flow": round((cur - mn_prev) * price / 1e6, 1) if mn_prev else None,
+            "flow_aum":     round((cur - wk_prev) / wk_prev * 100, 3) if wk_prev else None,
+            "aum_b":        round(aum / 1e9, 1),
+        }
+    have = sum(1 for f in flows.values() if f["weekly_flow"])
+    print(f"  ETF flows: snapshotted {len(snaps)} ETFs, {have} with week-over-week delta")
+    return flows
+
+
 def score_all_sectors(finviz: FinvizClient, _ts_client,
-                       equity_flow: float, equity_avg: float) -> list:
+                       equity_flow: float, equity_avg: float,
+                       etf_flows: dict = None) -> list:
     """Score all 11 sector ETFs and return ranked list"""
     etf_tickers = list(SECTOR_ETFS.values())
 
@@ -97,19 +163,21 @@ def score_all_sectors(finviz: FinvizClient, _ts_client,
         fv = fv_data.get(etf, {})
         perf_week = fv.get("perf_week", 0) or 0
         perf_3m   = fv.get("perf_quarter", 0) or 0
+        flow = (etf_flows or {}).get(etf, {})
         etf_data = {
             "price":    fv.get("price", 0),
             "sma50":    fv.get("sma50", 0),
             "sma200":   fv.get("sma200", 0),
             "sma20":    fv.get("price", 0),
             "perf_ytd": fv.get("perf_year", 0),
+            "perf_month": fv.get("perf_month", 0),
             "perf_week": perf_week,
-            # Weekly flow proxy: use ETF weekly % performance × scale factor.
-            # perf_week direction matches actual net flow direction (rotation-safe).
-            # +3% week → ~$600M implied inflow; -2% → ~-$400M outflow.
-            # Previous proxy (perf_3m * 50) was backwards during rotation weeks
-            # (e.g. Cons Disc: perf_q=-4.6% but massive inflows, 156 names at 70+).
-            "weekly_flow": perf_week * 200,
+            # Real creation/redemption flow (delta-shares × price) when available;
+            # falls back to the legacy perf_week proxy until snapshots accrue.
+            "weekly_flow":  flow["weekly_flow"] if flow.get("weekly_flow") is not None
+                            else perf_week * 200,
+            "monthly_flow": flow.get("monthly_flow"),
+            "flow_aum":     flow.get("flow_aum"),
         }
         result = calculate_sector_flow_score(sector_name, etf_data, equity_flow, equity_avg)
         # Attach 3M perf for use as sector_perf_63d in stock-level scoring
@@ -303,8 +371,9 @@ def run_weekly_flow_score():
     equity_avg = fund_flows["equity_4wk_avg"]
     print(f"  Equity flow: ${equity_weekly/1000:.1f}B (4wk avg: ${equity_avg/1000:.1f}B)")
 
-    # --- Level 2: Sector Scores ---
-    sector_scores = score_all_sectors(finviz, None, equity_weekly, equity_avg)
+    # --- Level 2: Sector Scores (with real ETF creation/redemption flows) ---
+    etf_flows = compute_sector_etf_flows(sb)
+    sector_scores = score_all_sectors(finviz, None, equity_weekly, equity_avg, etf_flows=etf_flows)
     save_sector_scores(sb, sector_scores)
     print(f"  Sectors scored. Top: {sector_scores[0]['sector']} ({sector_scores[0]['flow_score']})")
 

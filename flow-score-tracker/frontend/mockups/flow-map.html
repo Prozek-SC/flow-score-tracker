@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Flow Map - concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Hanken+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0C1722; --panel:#13202E; --line:#22384B; --line2:#1A2A3A;
+  --ink:#E9E6DA; --ink-dim:#8FA3B3; --ink-faint:#5C7184;
+  --hot:#F4D58D; --amber:#E89B3C; --violet:#8B6FB0; --slate:#34538C; --cold:#2A3C5C;
+  --pos:#E89B3C; --neg:#4FA6C4; --dist:#E2574C;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--ink);font-family:'Hanken Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body{background:
+  radial-gradient(1200px 600px at 78% -10%, #15314311, transparent),
+  repeating-linear-gradient(0deg,transparent,transparent 38px,#ffffff04 38px,#ffffff04 39px),
+  var(--bg);min-height:100vh}
+.mono{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1240px;margin:0 auto;padding:28px 30px 80px}
+header{display:flex;align-items:flex-end;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:20px}
+.brand{display:flex;flex-direction:column;gap:7px}
+.ey{font-family:'IBM Plex Mono';font-size:10.5px;letter-spacing:.34em;text-transform:uppercase;color:var(--ink-faint)}
+h1{font-family:'Bricolage Grotesque';font-weight:800;font-size:40px;letter-spacing:-.02em;line-height:.92}
+h1 .dim{color:var(--ink-faint);font-weight:500}
+.gauge{display:flex;gap:26px;align-items:flex-end}
+.g{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.g .n{font-family:'Bricolage Grotesque';font-weight:700;font-size:26px;line-height:1}
+.g .l{font-family:'IBM Plex Mono';font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint)}
+nav{display:flex;gap:2px;margin:22px 0 24px}
+.tab{font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);
+  padding:9px 16px;cursor:pointer;border:1px solid transparent;border-radius:2px;background:none;transition:.18s}
+.tab:hover{color:var(--ink-dim)}
+.tab.on{color:var(--bg);background:var(--ink);font-weight:600}
+.sub{font-family:'IBM Plex Mono';font-size:11px;color:var(--ink-faint);margin:-12px 0 22px;letter-spacing:.02em;line-height:1.6;max-width:760px}
+.view{display:none}.view.on{display:block;animation:fade .4s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.cur{display:grid;grid-template-columns:1.45fr 1fr;gap:22px;align-items:start}
+.field{position:relative;background:linear-gradient(160deg,#0e1f2e,#0c1a26);border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.field svg{display:block;width:100%;height:auto}
+.qlabel{font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.2em;fill:var(--ink-faint)}
+.ladder{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.lrow{display:grid;grid-template-columns:22px 1fr auto;gap:12px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line2)}
+.lrow:last-child{border-bottom:none}
+.lrow .rk{font-family:'IBM Plex Mono';font-size:10px;color:var(--ink-faint)}
+.lrow .nm{display:flex;flex-direction:column;gap:2px}
+.lrow .nm b{font-weight:600;font-size:13.5px}
+.lrow .nm .etf{font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-faint);letter-spacing:.1em}
+.lrow .rt{display:flex;align-items:center;gap:14px}
+.bars{display:flex;gap:2px;align-items:flex-end;height:26px}
+.bars i{width:5px;border-radius:1px;display:block}
+.sc{font-family:'Bricolage Grotesque';font-weight:700;font-size:23px;line-height:1;width:42px;text-align:right}
+.wow{font-family:'IBM Plex Mono';font-size:10px;width:34px;text-align:right}
+.flowtag{font-family:'IBM Plex Mono';font-size:10px;color:var(--ink-dim);width:60px;text-align:right}
+.legend{display:flex;gap:18px;margin-top:14px;font-family:'IBM Plex Mono';font-size:10px;color:var(--ink-faint);flex-wrap:wrap}
+.legend span{display:flex;align-items:center;gap:6px}
+.dot{width:9px;height:9px;border-radius:50%}
+.heat{width:100%;border-collapse:collapse;font-family:'IBM Plex Mono'}
+.heat th{font-size:9.5px;color:var(--ink-faint);font-weight:400;padding:6px 4px;text-align:center;letter-spacing:.04em}
+.heat td.lab{text-align:left;font-size:12px;font-family:'Hanken Grotesk';font-weight:600;color:var(--ink);padding-right:14px;white-space:nowrap}
+.heat td.lab .etf{color:var(--ink-faint);font-family:'IBM Plex Mono';font-size:9px;margin-left:6px}
+.cell{width:64px;height:40px;text-align:center;line-height:40px;font-size:12px;font-weight:500;border:2px solid var(--bg);border-radius:3px}
+.cap{font-family:'IBM Plex Mono';font-size:11px;color:var(--ink-faint);margin-top:16px;line-height:1.8;max-width:820px}
+.anat{display:flex;flex-direction:column;gap:11px}
+.arow{display:grid;grid-template-columns:150px 1fr 48px;gap:16px;align-items:center}
+.arow .an{font-weight:600;font-size:13.5px;display:flex;flex-direction:column;gap:1px}
+.arow .an .etf{font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-faint);letter-spacing:.1em}
+.track{height:30px;display:flex;border-radius:3px;overflow:hidden;background:#0d1a26;border:1px solid var(--line2)}
+.seg{height:100%;display:flex;align-items:center;padding-left:9px;font-family:'IBM Plex Mono';font-size:10.5px;font-weight:500;white-space:nowrap;transition:.6s}
+.seg.cf{background:var(--amber);color:#0c1722}.seg.tr{background:var(--violet);color:#f0ecdf}.seg.mo{background:var(--slate);color:#e9e6da}
+.arow .tot{font-family:'Bricolage Grotesque';font-weight:700;font-size:22px;text-align:right}
+.akey{display:flex;gap:20px;margin:6px 0 22px;font-family:'IBM Plex Mono';font-size:10.5px;color:var(--ink-dim)}
+.akey span{display:flex;align-items:center;gap:7px}.akey i{width:14px;height:11px;border-radius:2px;display:block}
+.note{font-family:'IBM Plex Mono';font-size:10.5px;color:var(--ink-faint);margin-top:30px;border-top:1px solid var(--line2);padding-top:14px;line-height:1.8;max-width:820px}
+@media(max-width:900px){.cur{grid-template-columns:1fr}.gauge{display:none}}
+</style></head>
+<body><div class="wrap">
+<header>
+  <div class="brand">
+    <div class="ey">TTI / Flow Score System / Sector Dashboard</div>
+    <h1>The Flow Map<span class="dim"> /</span> <span id="hddate" class="dim"></span></h1>
+  </div>
+  <div class="gauge" id="gauge"></div>
+</header>
+<nav>
+  <button class="tab on" data-v="current">Current</button>
+  <button class="tab" data-v="drift">Drift</button>
+  <button class="tab" data-v="anatomy">Anatomy</button>
+</nav>
+<section class="view on" id="v-current">
+  <div class="sub" id="sub-current"></div>
+  <div class="cur">
+    <div>
+      <div class="field" id="field"></div>
+      <div class="legend">
+        <span><span class="dot" style="background:var(--hot)"></span>hot / capital pooling</span>
+        <span><span class="dot" style="background:var(--violet)"></span>warming</span>
+        <span><span class="dot" style="background:var(--slate)"></span>cool</span>
+        <span><span class="dot" style="background:var(--cold)"></span>draining</span>
+        <span>trail = last week to now</span>
+      </div>
+    </div>
+    <div class="ladder" id="ladder"></div>
+  </div>
+</section>
+<section class="view" id="v-drift">
+  <div class="sub">Ten weeks of rotation. Each cell is a sector's Flow Score that week - read left to right to watch the wind change. Heat is score.</div>
+  <div style="overflow-x:auto"><table class="heat" id="heat"></table></div>
+  <div class="cap" id="driftcap"></div>
+</section>
+<section class="view" id="v-anatomy">
+  <div class="sub">What each score is made of. Every Flow Score is exactly Capital Flow + Trend + Momentum - so the bar is the score, and the split tells you why.</div>
+  <div class="akey">
+    <span><i style="background:var(--amber)"></i>Capital Flow / 0-40</span>
+    <span><i style="background:var(--violet)"></i>Trend / 0-30</span>
+    <span><i style="background:var(--slate)"></i>Momentum / 0-30</span>
+  </div>
+  <div class="anat" id="anat"></div>
+  <div class="note" id="anatnote"></div>
+</section>
+</div>
+<script>
+const DATA = {"dates": ["2026-02-28", "2026-04-25", "2026-05-02", "2026-05-09", "2026-05-16", "2026-05-23", "2026-05-30", "2026-06-06", "2026-06-13", "2026-06-18"], "weeks": {"2026-02-28": [{"date": "2026-02-28", "etf": "XLE", "sector": "Energy", "CF": 36, "Trend": 30, "Mom": 24, "Score": 90, "WeeklyFlow_M": 62.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLU", "sector": "Utilities", "CF": 33, "Trend": 30, "Mom": 21, "Score": 84, "WeeklyFlow_M": 47.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLP", "sector": "Consumer Staples", "CF": 34, "Trend": 30, "Mom": 20, "Score": 84, "WeeklyFlow_M": 47.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLI", "sector": "Industrials", "CF": 31, "Trend": 30, "Mom": 21, "Score": 82, "WeeklyFlow_M": 0.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLB", "sector": "Materials", "CF": 29, "Trend": 30, "Mom": 19, "Score": 78, "WeeklyFlow_M": 6.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLV", "sector": "Health Care", "CF": 29, "Trend": 30, "Mom": 15, "Score": 74, "WeeklyFlow_M": 55.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLRE", "sector": "Real Estate", "CF": 24, "Trend": 30, "Mom": 17, "Score": 71, "WeeklyFlow_M": 3.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLC", "sector": "Communication Services", "CF": 22, "Trend": 24, "Mom": 12, "Score": 58, "WeeklyFlow_M": 6.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 19, "Trend": 14, "Mom": 8, "Score": 41, "WeeklyFlow_M": 14.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLK", "sector": "Technology", "CF": 16, "Trend": 15, "Mom": 5, "Score": 36, "WeeklyFlow_M": 63.0, "wow": 0}, {"date": "2026-02-28", "etf": "XLF", "sector": "Financials", "CF": 12, "Trend": 6, "Mom": 7, "Score": 25, "WeeklyFlow_M": 149.0, "wow": 0}], "2026-04-25": [{"date": "2026-04-25", "etf": "XLK", "sector": "Technology", "CF": 21, "Trend": 30, "Mom": 25, "Score": 76, "WeeklyFlow_M": 490.0, "wow": 40}, {"date": "2026-04-25", "etf": "XLRE", "sector": "Real Estate", "CF": 13, "Trend": 27, "Mom": 22, "Score": 62, "WeeklyFlow_M": -29.0, "wow": -9}, {"date": "2026-04-25", "etf": "XLB", "sector": "Materials", "CF": 18, "Trend": 24, "Mom": 19, "Score": 61, "WeeklyFlow_M": -210.0, "wow": -17}, {"date": "2026-04-25", "etf": "XLI", "sector": "Industrials", "CF": 14, "Trend": 25, "Mom": 19, "Score": 58, "WeeklyFlow_M": -596.0, "wow": -24}, {"date": "2026-04-25", "etf": "XLC", "sector": "Communication Services", "CF": 15, "Trend": 24, "Mom": 16, "Score": 55, "WeeklyFlow_M": 48.0, "wow": -3}, {"date": "2026-04-25", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 17, "Trend": 15, "Mom": 17, "Score": 49, "WeeklyFlow_M": 227.0, "wow": 8}, {"date": "2026-04-25", "etf": "XLU", "sector": "Utilities", "CF": 9, "Trend": 21, "Mom": 17, "Score": 47, "WeeklyFlow_M": -742.0, "wow": -37}, {"date": "2026-04-25", "etf": "XLP", "sector": "Consumer Staples", "CF": 11, "Trend": 21, "Mom": 14, "Score": 46, "WeeklyFlow_M": -1.0, "wow": -38}, {"date": "2026-04-25", "etf": "XLE", "sector": "Energy", "CF": 15, "Trend": 18, "Mom": 12, "Score": 45, "WeeklyFlow_M": -3.0, "wow": -45}, {"date": "2026-04-25", "etf": "XLF", "sector": "Financials", "CF": 10, "Trend": 15, "Mom": 18, "Score": 43, "WeeklyFlow_M": -338.0, "wow": 18}, {"date": "2026-04-25", "etf": "XLV", "sector": "Health Care", "CF": 19, "Trend": 10, "Mom": 9, "Score": 38, "WeeklyFlow_M": 184.0, "wow": -36}], "2026-05-02": [{"date": "2026-05-02", "etf": "XLK", "sector": "Technology", "CF": 23, "Trend": 30, "Mom": 25, "Score": 78, "WeeklyFlow_M": 160.0, "wow": 2}, {"date": "2026-05-02", "etf": "XLRE", "sector": "Real Estate", "CF": 19, "Trend": 30, "Mom": 22, "Score": 71, "WeeklyFlow_M": -160.0, "wow": 9}, {"date": "2026-05-02", "etf": "XLC", "sector": "Communication Services", "CF": 21, "Trend": 30, "Mom": 17, "Score": 68, "WeeklyFlow_M": -46.0, "wow": 13}, {"date": "2026-05-02", "etf": "XLI", "sector": "Industrials", "CF": 24, "Trend": 24, "Mom": 17, "Score": 65, "WeeklyFlow_M": 249.0, "wow": 7}, {"date": "2026-05-02", "etf": "XLE", "sector": "Energy", "CF": 23, "Trend": 25, "Mom": 12, "Score": 60, "WeeklyFlow_M": 580.0, "wow": 15}, {"date": "2026-05-02", "etf": "XLU", "sector": "Utilities", "CF": 18, "Trend": 26, "Mom": 15, "Score": 59, "WeeklyFlow_M": 50.0, "wow": 12}, {"date": "2026-05-02", "etf": "XLB", "sector": "Materials", "CF": 23, "Trend": 20, "Mom": 14, "Score": 57, "WeeklyFlow_M": -14.0, "wow": -4}, {"date": "2026-05-02", "etf": "XLP", "sector": "Consumer Staples", "CF": 16, "Trend": 24, "Mom": 16, "Score": 56, "WeeklyFlow_M": -217.0, "wow": 10}, {"date": "2026-05-02", "etf": "XLF", "sector": "Financials", "CF": 24, "Trend": 15, "Mom": 17, "Score": 56, "WeeklyFlow_M": 779.0, "wow": 13}, {"date": "2026-05-02", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 19, "Trend": 15, "Mom": 19, "Score": 53, "WeeklyFlow_M": -186.0, "wow": 4}, {"date": "2026-05-02", "etf": "XLV", "sector": "Health Care", "CF": 14, "Trend": 10, "Mom": 10, "Score": 34, "WeeklyFlow_M": -397.0, "wow": -4}], "2026-05-09": [{"date": "2026-05-09", "etf": "XLK", "sector": "Technology", "CF": 25, "Trend": 30, "Mom": 26, "Score": 81, "WeeklyFlow_M": 728.0, "wow": 3}, {"date": "2026-05-09", "etf": "XLRE", "sector": "Real Estate", "CF": 21, "Trend": 30, "Mom": 20, "Score": 71, "WeeklyFlow_M": 166.0, "wow": 0}, {"date": "2026-05-09", "etf": "XLC", "sector": "Communication Services", "CF": 19, "Trend": 30, "Mom": 15, "Score": 64, "WeeklyFlow_M": -263.0, "wow": -4}, {"date": "2026-05-09", "etf": "XLI", "sector": "Industrials", "CF": 24, "Trend": 24, "Mom": 13, "Score": 61, "WeeklyFlow_M": 565.0, "wow": -4}, {"date": "2026-05-09", "etf": "XLP", "sector": "Consumer Staples", "CF": 19, "Trend": 23, "Mom": 15, "Score": 57, "WeeklyFlow_M": 117.0, "wow": 1}, {"date": "2026-05-09", "etf": "XLB", "sector": "Materials", "CF": 20, "Trend": 20, "Mom": 13, "Score": 53, "WeeklyFlow_M": -19.0, "wow": -4}, {"date": "2026-05-09", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 16, "Trend": 15, "Mom": 21, "Score": 52, "WeeklyFlow_M": -331.0, "wow": -1}, {"date": "2026-05-09", "etf": "XLE", "sector": "Energy", "CF": 21, "Trend": 14, "Mom": 13, "Score": 48, "WeeklyFlow_M": 14.0, "wow": -12}, {"date": "2026-05-09", "etf": "XLU", "sector": "Utilities", "CF": 17, "Trend": 12, "Mom": 10, "Score": 39, "WeeklyFlow_M": -330.0, "wow": -20}, {"date": "2026-05-09", "etf": "XLF", "sector": "Financials", "CF": 13, "Trend": 12, "Mom": 11, "Score": 36, "WeeklyFlow_M": -1100.0, "wow": -20}, {"date": "2026-05-09", "etf": "XLV", "sector": "Health Care", "CF": 15, "Trend": 8, "Mom": 9, "Score": 32, "WeeklyFlow_M": -629.0, "wow": -2}], "2026-05-16": [{"date": "2026-05-16", "etf": "XLK", "sector": "Technology", "CF": 23, "Trend": 30, "Mom": 26, "Score": 79, "WeeklyFlow_M": 3.0, "wow": -2}, {"date": "2026-05-16", "etf": "XLP", "sector": "Consumer Staples", "CF": 23, "Trend": 23, "Mom": 18, "Score": 64, "WeeklyFlow_M": 164.0, "wow": 7}, {"date": "2026-05-16", "etf": "XLE", "sector": "Energy", "CF": 13, "Trend": 28, "Mom": 22, "Score": 63, "WeeklyFlow_M": -707.0, "wow": 15}, {"date": "2026-05-16", "etf": "XLRE", "sector": "Real Estate", "CF": 17, "Trend": 30, "Mom": 15, "Score": 62, "WeeklyFlow_M": 36.0, "wow": -9}, {"date": "2026-05-16", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 23, "Trend": 15, "Mom": 15, "Score": 53, "WeeklyFlow_M": 464.0, "wow": 1}, {"date": "2026-05-16", "etf": "XLB", "sector": "Materials", "CF": 24, "Trend": 16, "Mom": 12, "Score": 52, "WeeklyFlow_M": 40.0, "wow": -1}, {"date": "2026-05-16", "etf": "XLI", "sector": "Industrials", "CF": 14, "Trend": 20, "Mom": 16, "Score": 50, "WeeklyFlow_M": -1100.0, "wow": -11}, {"date": "2026-05-16", "etf": "XLV", "sector": "Health Care", "CF": 19, "Trend": 12, "Mom": 12, "Score": 43, "WeeklyFlow_M": 175.0, "wow": 11}, {"date": "2026-05-16", "etf": "XLC", "sector": "Communication Services", "CF": 15, "Trend": 15, "Mom": 12, "Score": 42, "WeeklyFlow_M": -64.0, "wow": -22}, {"date": "2026-05-16", "etf": "XLF", "sector": "Financials", "CF": 16, "Trend": 12, "Mom": 14, "Score": 42, "WeeklyFlow_M": -345.0, "wow": 6}, {"date": "2026-05-16", "etf": "XLU", "sector": "Utilities", "CF": 21, "Trend": 8, "Mom": 9, "Score": 38, "WeeklyFlow_M": 97.0, "wow": -1}], "2026-05-23": [{"date": "2026-05-23", "etf": "XLK", "sector": "Technology", "CF": 18, "Trend": 30, "Mom": 26, "Score": 74, "WeeklyFlow_M": -400.0, "wow": -5}, {"date": "2026-05-23", "etf": "XLP", "sector": "Consumer Staples", "CF": 21, "Trend": 30, "Mom": 15, "Score": 66, "WeeklyFlow_M": -35.0, "wow": 2}, {"date": "2026-05-23", "etf": "XLE", "sector": "Energy", "CF": 19, "Trend": 30, "Mom": 17, "Score": 66, "WeeklyFlow_M": -324.0, "wow": 3}, {"date": "2026-05-23", "etf": "XLRE", "sector": "Real Estate", "CF": 19, "Trend": 30, "Mom": 15, "Score": 64, "WeeklyFlow_M": 5.0, "wow": 2}, {"date": "2026-05-23", "etf": "XLI", "sector": "Industrials", "CF": 27, "Trend": 22, "Mom": 13, "Score": 62, "WeeklyFlow_M": 418.0, "wow": 12}, {"date": "2026-05-23", "etf": "XLV", "sector": "Health Care", "CF": 23, "Trend": 15, "Mom": 15, "Score": 53, "WeeklyFlow_M": 526.0, "wow": 10}, {"date": "2026-05-23", "etf": "XLB", "sector": "Materials", "CF": 23, "Trend": 18, "Mom": 11, "Score": 52, "WeeklyFlow_M": -30.0, "wow": 0}, {"date": "2026-05-23", "etf": "XLC", "sector": "Communication Services", "CF": 21, "Trend": 15, "Mom": 13, "Score": 49, "WeeklyFlow_M": 158.0, "wow": 7}, {"date": "2026-05-23", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 17, "Trend": 15, "Mom": 15, "Score": 47, "WeeklyFlow_M": -361.0, "wow": -6}, {"date": "2026-05-23", "etf": "XLU", "sector": "Utilities", "CF": 15, "Trend": 19, "Mom": 12, "Score": 46, "WeeklyFlow_M": -453.0, "wow": 8}, {"date": "2026-05-23", "etf": "XLF", "sector": "Financials", "CF": 13, "Trend": 15, "Mom": 15, "Score": 43, "WeeklyFlow_M": -477.0, "wow": 1}], "2026-05-30": [{"date": "2026-05-30", "etf": "XLK", "sector": "Technology", "CF": 26, "Trend": 30, "Mom": 26, "Score": 82, "WeeklyFlow_M": 559.0, "wow": 8}, {"date": "2026-05-30", "etf": "XLI", "sector": "Industrials", "CF": 23, "Trend": 30, "Mom": 16, "Score": 69, "WeeklyFlow_M": 92.0, "wow": 7}, {"date": "2026-05-30", "etf": "XLRE", "sector": "Real Estate", "CF": 21, "Trend": 30, "Mom": 13, "Score": 64, "WeeklyFlow_M": 62.0, "wow": 0}, {"date": "2026-05-30", "etf": "XLB", "sector": "Materials", "CF": 21, "Trend": 24, "Mom": 12, "Score": 57, "WeeklyFlow_M": -156.0, "wow": 5}, {"date": "2026-05-30", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 23, "Trend": 15, "Mom": 18, "Score": 56, "WeeklyFlow_M": 646.0, "wow": 9}, {"date": "2026-05-30", "etf": "XLP", "sector": "Consumer Staples", "CF": 23, "Trend": 16, "Mom": 13, "Score": 52, "WeeklyFlow_M": 201.0, "wow": -14}, {"date": "2026-05-30", "etf": "XLC", "sector": "Communication Services", "CF": 17, "Trend": 15, "Mom": 13, "Score": 45, "WeeklyFlow_M": -186.0, "wow": -4}, {"date": "2026-05-30", "etf": "XLV", "sector": "Health Care", "CF": 12, "Trend": 15, "Mom": 17, "Score": 44, "WeeklyFlow_M": -766.0, "wow": -9}, {"date": "2026-05-30", "etf": "XLF", "sector": "Financials", "CF": 15, "Trend": 15, "Mom": 13, "Score": 43, "WeeklyFlow_M": -228.0, "wow": 0}, {"date": "2026-05-30", "etf": "XLE", "sector": "Energy", "CF": 16, "Trend": 14, "Mom": 10, "Score": 40, "WeeklyFlow_M": -448.0, "wow": -26}, {"date": "2026-05-30", "etf": "XLU", "sector": "Utilities", "CF": 19, "Trend": 10, "Mom": 9, "Score": 38, "WeeklyFlow_M": 147.0, "wow": -8}], "2026-06-06": [{"date": "2026-06-06", "etf": "XLK", "sector": "Technology", "CF": 22, "Trend": 30, "Mom": 19, "Score": 71, "WeeklyFlow_M": -141.0, "wow": -11}, {"date": "2026-06-06", "etf": "XLI", "sector": "Industrials", "CF": 28, "Trend": 30, "Mom": 13, "Score": 71, "WeeklyFlow_M": 208.0, "wow": 2}, {"date": "2026-06-06", "etf": "XLRE", "sector": "Real Estate", "CF": 23, "Trend": 25, "Mom": 15, "Score": 63, "WeeklyFlow_M": -160.0, "wow": -1}, {"date": "2026-06-06", "etf": "XLV", "sector": "Health Care", "CF": 27, "Trend": 15, "Mom": 20, "Score": 62, "WeeklyFlow_M": 421.0, "wow": 18}, {"date": "2026-06-06", "etf": "XLB", "sector": "Materials", "CF": 31, "Trend": 18, "Mom": 11, "Score": 60, "WeeklyFlow_M": 691.0, "wow": 3}, {"date": "2026-06-06", "etf": "XLP", "sector": "Consumer Staples", "CF": 18, "Trend": 21, "Mom": 12, "Score": 51, "WeeklyFlow_M": -696.0, "wow": -1}, {"date": "2026-06-06", "etf": "XLF", "sector": "Financials", "CF": 17, "Trend": 15, "Mom": 16, "Score": 48, "WeeklyFlow_M": -425.0, "wow": 5}, {"date": "2026-06-06", "etf": "XLE", "sector": "Energy", "CF": 12, "Trend": 18, "Mom": 16, "Score": 46, "WeeklyFlow_M": -481.0, "wow": 6}, {"date": "2026-06-06", "etf": "XLU", "sector": "Utilities", "CF": 23, "Trend": 10, "Mom": 12, "Score": 45, "WeeklyFlow_M": 98.0, "wow": 7}, {"date": "2026-06-06", "etf": "XLC", "sector": "Communication Services", "CF": 22, "Trend": 6, "Mom": 9, "Score": 37, "WeeklyFlow_M": -219.0, "wow": -8}, {"date": "2026-06-06", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 17, "Trend": 8, "Mom": 11, "Score": 36, "WeeklyFlow_M": -431.0, "wow": -20}], "2026-06-13": [{"date": "2026-06-13", "etf": "XLK", "sector": "Technology", "CF": 21, "Trend": 30, "Mom": 28, "Score": 79, "WeeklyFlow_M": 107.0, "wow": 8}, {"date": "2026-06-13", "etf": "XLB", "sector": "Materials", "CF": 26, "Trend": 24, "Mom": 17, "Score": 67, "WeeklyFlow_M": 101.0, "wow": 7}, {"date": "2026-06-13", "etf": "XLI", "sector": "Industrials", "CF": 20, "Trend": 24, "Mom": 17, "Score": 61, "WeeklyFlow_M": 281.0, "wow": -10}, {"date": "2026-06-13", "etf": "XLRE", "sector": "Real Estate", "CF": 17, "Trend": 30, "Mom": 13, "Score": 60, "WeeklyFlow_M": 144.0, "wow": -3}, {"date": "2026-06-13", "etf": "XLP", "sector": "Consumer Staples", "CF": 15, "Trend": 30, "Mom": 12, "Score": 57, "WeeklyFlow_M": 17.0, "wow": 6}, {"date": "2026-06-13", "etf": "XLV", "sector": "Health Care", "CF": 18, "Trend": 15, "Mom": 15, "Score": 48, "WeeklyFlow_M": 207.0, "wow": -14}, {"date": "2026-06-13", "etf": "XLE", "sector": "Energy", "CF": 9, "Trend": 24, "Mom": 14, "Score": 47, "WeeklyFlow_M": 314.0, "wow": 1}, {"date": "2026-06-13", "etf": "XLF", "sector": "Financials", "CF": 20, "Trend": 10, "Mom": 13, "Score": 43, "WeeklyFlow_M": 196.0, "wow": -5}, {"date": "2026-06-13", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 15, "Trend": 12, "Mom": 14, "Score": 41, "WeeklyFlow_M": -65.0, "wow": 5}, {"date": "2026-06-13", "etf": "XLU", "sector": "Utilities", "CF": 13, "Trend": 10, "Mom": 8, "Score": 31, "WeeklyFlow_M": 244.0, "wow": -14}, {"date": "2026-06-13", "etf": "XLC", "sector": "Communication Services", "CF": 11, "Trend": 6, "Mom": 11, "Score": 28, "WeeklyFlow_M": -100.0, "wow": -9}], "2026-06-18": [{"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLI", "sector": "Industrials", "CF": 29, "Trend": 30, "Mom": 19, "Score": 78, "WeeklyFlow_M": 576.0, "wow": 17}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLB", "sector": "Materials", "CF": 28, "Trend": 26, "Mom": 18, "Score": 72, "WeeklyFlow_M": 207.0, "wow": 5}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLK", "sector": "Technology", "CF": 19, "Trend": 30, "Mom": 21, "Score": 70, "WeeklyFlow_M": -390.0, "wow": -9}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLRE", "sector": "Real Estate", "CF": 25, "Trend": 30, "Mom": 13, "Score": 68, "WeeklyFlow_M": 88.0, "wow": 8}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLU", "sector": "Utilities", "CF": 22, "Trend": 20, "Mom": 13, "Score": 55, "WeeklyFlow_M": -233.0, "wow": 24}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLY", "sector": "Consumer Discretionary", "CF": 23, "Trend": 12, "Mom": 14, "Score": 49, "WeeklyFlow_M": -154.0, "wow": 8}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLF", "sector": "Financials", "CF": 19, "Trend": 15, "Mom": 15, "Score": 49, "WeeklyFlow_M": -485.0, "wow": 6}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLP", "sector": "Consumer Staples", "CF": 14, "Trend": 17, "Mom": 10, "Score": 41, "WeeklyFlow_M": -572.0, "wow": -16}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLV", "sector": "Health Care", "CF": 12, "Trend": 15, "Mom": 13, "Score": 40, "WeeklyFlow_M": -711.0, "wow": -8}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLC", "sector": "Communication Services", "CF": 22, "Trend": 5, "Mom": 7, "Score": 34, "WeeklyFlow_M": -239.0, "wow": 6}, {"date": "The_Flow_Map___Week_ending_June_18__2026.pdf.txt", "etf": "XLE", "sector": "Energy", "CF": 17, "Trend": 12, "Mom": 2, "Score": 31, "WeeklyFlow_M": -504.0, "wow": -16}]}};
+const FULL={XLK:'Technology',XLB:'Materials',XLI:'Industrials',XLRE:'Real Estate',XLP:'Consumer Staples',XLV:'Health Care',XLE:'Energy',XLF:'Financials',XLY:'Consumer Discretionary',XLU:'Utilities',XLC:'Communication Services'};
+const dates=DATA.dates, latest=dates[dates.length-1];
+function lerp(a,b,t){return a+(b-a)*t}
+function hex(c){c=c.replace('#','');return [parseInt(c.slice(0,2),16),parseInt(c.slice(2,4),16),parseInt(c.slice(4,6),16)]}
+function mix(c1,c2,t){const a=hex(c1),b=hex(c2);return 'rgb('+Math.round(lerp(a[0],b[0],t))+','+Math.round(lerp(a[1],b[1],t))+','+Math.round(lerp(a[2],b[2],t))+')'}
+function thermal(s){
+  const stops=[[0,'#243349'],[30,'#2A3C5C'],[42,'#34538C'],[55,'#6A5E9E'],[66,'#8B6FB0'],[74,'#C77B45'],[82,'#E89B3C'],[92,'#F4D58D'],[100,'#FBEFC9']];
+  s=Math.max(0,Math.min(100,s));
+  for(let i=0;i<stops.length-1;i++){if(s<=stops[i+1][0]){const t=(s-stops[i][0])/(stops[i+1][0]-stops[i][0]);return mix(stops[i][1],stops[i+1][1],t)}}
+  return stops[stops.length-1][1];
+}
+function inkfor(s){return s>=70?'#0c1722':'#e9e6da'}
+const fmtFlow=v=>{const a=Math.abs(v);const s=v<0?'−':'+';return a>=1000?s+'$'+(a/1000).toFixed(1)+'B':s+'$'+Math.round(a)+'M'};
+function ts(d){const p=d.split('-');return new Date(p[0],p[1]-1,p[2]).toLocaleDateString('en-US',{month:'short',day:'numeric'})}
+document.getElementById('hddate').textContent=ts(latest);
+const wk=DATA.weeks[latest];
+const above=wk.filter(s=>s.Score>=60).length, below=wk.filter(s=>s.Score<40).length;
+const lead=[...wk].sort((a,b)=>b.Score-a.Score)[0];
+document.getElementById('gauge').innerHTML=
+  '<div class="g"><div class="n" style="color:'+thermal(lead.Score)+'">'+lead.Score+'</div><div class="l">'+lead.etf+' leads</div></div>'+
+  '<div class="g"><div class="n">'+above+'</div><div class="l">above 60</div></div>'+
+  '<div class="g"><div class="n" style="color:var(--neg)">'+below+'</div><div class="l">below 40</div></div>';
+document.getElementById('sub-current').textContent=
+  FULL[lead.etf]+' leads the board at '+lead.Score+'. Position is trend x momentum; heat is the full Flow Score; size tracks capital-flow weight.';
+function field(){
+  const W=620,H=480,P=46, hi=30;
+  const x=v=>P+(v)/(hi)*(W-2*P);
+  const y=v=>H-P-(v)/(hi)*(H-2*P);
+  const prevWk=dates.length>1?DATA.weeks[dates[dates.length-2]]:null;
+  const pmap={}; if(prevWk)prevWk.forEach(s=>pmap[s.etf]=s);
+  let g='<svg viewBox="0 0 '+W+' '+H+'">';
+  g+='<rect x="'+x(15)+'" y="'+P+'" width="'+(W-P-x(15))+'" height="'+(y(15)-P)+'" fill="#e89b3c08"/>';
+  for(let v=0;v<=30;v+=5){g+='<line x1="'+x(v)+'" y1="'+P+'" x2="'+x(v)+'" y2="'+(H-P)+'" stroke="#ffffff08"/><line x1="'+P+'" y1="'+y(v)+'" x2="'+(W-P)+'" y2="'+y(v)+'" stroke="#ffffff08"/>'}
+  g+='<line x1="'+x(15)+'" y1="'+P+'" x2="'+x(15)+'" y2="'+(H-P)+'" stroke="#ffffff20" stroke-dasharray="3 4"/><line x1="'+P+'" y1="'+y(15)+'" x2="'+(W-P)+'" y2="'+y(15)+'" stroke="#ffffff20" stroke-dasharray="3 4"/>';
+  g+='<text class="qlabel" x="'+(W-P-4)+'" y="'+(P+14)+'" text-anchor="end">LEADING</text>';
+  g+='<text class="qlabel" x="'+(P+4)+'" y="'+(P+14)+'">IMPROVING</text>';
+  g+='<text class="qlabel" x="'+(W-P-4)+'" y="'+(H-P-6)+'" text-anchor="end">WEAKENING</text>';
+  g+='<text class="qlabel" x="'+(P+4)+'" y="'+(H-P-6)+'">LAGGING</text>';
+  g+='<text class="qlabel" x="'+(W/2)+'" y="'+(H-14)+'" text-anchor="middle" fill="#5C7184">TREND</text>';
+  g+='<text class="qlabel" x="16" y="'+(H/2)+'" transform="rotate(-90 16 '+(H/2)+')" text-anchor="middle" fill="#5C7184">MOMENTUM</text>';
+  wk.forEach(s=>{
+    const p=pmap[s.etf];
+    if(p){g+='<line x1="'+x(p.Trend)+'" y1="'+y(p.Mom)+'" x2="'+x(s.Trend)+'" y2="'+y(s.Mom)+'" stroke="'+thermal(s.Score)+'" stroke-opacity=".4" stroke-width="1.5"/>';
+      g+='<circle cx="'+x(p.Trend)+'" cy="'+y(p.Mom)+'" r="2.5" fill="'+thermal(s.Score)+'" opacity=".35"/>'}
+    const r=6+s.CF/40*12;
+    g+='<circle cx="'+x(s.Trend)+'" cy="'+y(s.Mom)+'" r="'+(r+6)+'" fill="'+thermal(s.Score)+'" opacity=".10"/>';
+    g+='<circle cx="'+x(s.Trend)+'" cy="'+y(s.Mom)+'" r="'+r+'" fill="'+thermal(s.Score)+'" stroke="#0c1722" stroke-width="1.5"/>';
+    g+='<text x="'+x(s.Trend)+'" y="'+(y(s.Mom)+3.5)+'" text-anchor="middle" font-family="IBM Plex Mono" font-size="9.5" font-weight="600" fill="'+inkfor(s.Score)+'">'+s.etf+'</text>';
+  });
+  g+='</svg>';
+  document.getElementById('field').innerHTML=g;
+}
+function ladder(){
+  const sorted=[...wk].sort((a,b)=>b.Score-a.Score);
+  document.getElementById('ladder').innerHTML=sorted.map((s,i)=>{
+    const bars=[['CF',s.CF,40],['T',s.Trend,30],['M',s.Mom,30]].map(a=>
+      '<i style="height:'+(4+a[1]/a[2]*22)+'px;background:'+(a[0]=='CF'?'var(--amber)':a[0]=='T'?'var(--violet)':'var(--slate)')+'"></i>').join('');
+    const w=s.wow, wc=w>0?'var(--pos)':w<0?'var(--neg)':'var(--ink-faint)', ws=w>0?'+'+w:w;
+    return '<div class="lrow"><div class="rk mono">'+String(i+1).padStart(2,'0')+'</div>'+
+      '<div class="nm"><b>'+FULL[s.etf]+'</b><span class="etf">'+s.etf+'</span></div>'+
+      '<div class="rt"><div class="bars" title="CF '+s.CF+'/40 Trend '+s.Trend+'/30 Mom '+s.Mom+'/30">'+bars+'</div>'+
+      '<div class="flowtag mono">'+fmtFlow(s.WeeklyFlow_M)+'</div>'+
+      '<div class="sc" style="color:'+thermal(s.Score)+'">'+s.Score+'</div>'+
+      '<div class="wow mono" style="color:'+wc+'">'+ws+'</div></div></div>';
+  }).join('');
+}
+function drift(){
+  const latestSorted=[...wk].sort((a,b)=>b.Score-a.Score).map(s=>s.etf);
+  let h='<thead><tr><th class="lab" style="text-align:left">SECTOR</th>'+dates.map(d=>'<th>'+ts(d)+'</th>').join('')+'</tr></thead><tbody>';
+  latestSorted.forEach(etf=>{
+    h+='<tr><td class="lab">'+FULL[etf]+'<span class="etf">'+etf+'</span></td>';
+    dates.forEach(d=>{const s=DATA.weeks[d].find(x=>x.etf===etf);
+      if(!s){h+='<td><div class="cell" style="background:#0e1a26;color:#33485c">.</div></td>';return}
+      h+='<td><div class="cell" style="background:'+thermal(s.Score)+';color:'+inkfor(s.Score)+'">'+s.Score+'</div></td>'});
+    h+='</tr>';
+  });
+  document.getElementById('heat').innerHTML=h+'</tbody>';
+  const first=DATA.weeks[dates[0]], lst=wk;
+  function rank(arr){return [...arr].sort((a,b)=>b.Score-a.Score).map(s=>s.etf)}
+  const r0=rank(first), r1=rank(lst);
+  const risers=r1.map((e,i)=>({e:e,d:(r0.indexOf(e)-i)})).filter(o=>o.d>=3).sort((a,b)=>b.d-a.d).slice(0,2);
+  document.getElementById('driftcap').innerHTML=
+    'Window: '+ts(dates[0])+' to '+ts(latest)+'. Biggest climbers up the board: '+
+    risers.map(o=>'<b style="color:'+thermal(lst.find(s=>s.etf===o.e).Score)+'">'+FULL[o.e]+'</b> (+'+o.d+' ranks)').join(', ')+
+    '. The rotation reads left-to-right - a sector warming across the row is institutional money arriving before price confirms.';
+}
+function anatomy(){
+  const sorted=[...wk].sort((a,b)=>b.Score-a.Score);
+  document.getElementById('anat').innerHTML=sorted.map(s=>{
+    const seg=(cls,v,lab)=>'<div class="seg '+cls+'" style="width:'+v+'%">'+(v>=8?lab:'')+'</div>';
+    return '<div class="arow"><div class="an">'+FULL[s.etf]+'<span class="etf">'+s.etf+'</span></div>'+
+      '<div class="track">'+seg('cf',s.CF,'CF '+s.CF)+seg('tr',s.Trend,'TR '+s.Trend)+seg('mo',s.Mom,'MO '+s.Mom)+'</div>'+
+      '<div class="tot" style="color:'+thermal(s.Score)+'">'+s.Score+'</div></div>';
+  }).join('');
+  const topcf=[...wk].sort((a,b)=>b.CF-a.CF)[0];
+  document.getElementById('anatnote').innerHTML=
+    'Capital Flow is the leading leg - it turns before trend and momentum react. This week '+FULL[topcf.etf]+' carries the heaviest flow at '+topcf.CF+'/40. A high score built mostly on Trend + Momentum with weak CF is price running ahead of the money.';
+}
+field();ladder();drift();anatomy();
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+  document.getElementById('v-'+t.dataset.v).classList.add('on');
+});
+</script></body></html>
