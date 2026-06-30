@@ -924,9 +924,13 @@ def burst_trades():
 def options_debug(ticker):
     """Temporary: probe Tradier prod + sandbox to find which the key works on."""
     import os, requests
-    key = os.getenv("TRADIER_API_KEY") or os.getenv("TRADIER_TOKEN")
-    out = {"ticker": ticker.upper(), "key_present": bool(key),
-           "key_prefix": (key[:5] + "…") if key else None}
+    tradier_vars = {
+        k: {"len": len(v), "has_whitespace": v != v.strip(), "prefix": v.strip()[:5] + "…"}
+        for k, v in os.environ.items() if "TRADIER" in k.upper()
+    }
+    key = (os.getenv("TRADIER_API_KEY") or os.getenv("TRADIER_TOKEN") or "").strip()
+    out = {"ticker": ticker.upper(), "tradier_env_vars": tradier_vars,
+           "key_present": bool(key), "key_prefix": (key[:5] + "…") if key else None}
     for label, base in [("production", "https://api.tradier.com/v1"),
                         ("sandbox", "https://sandbox.tradier.com/v1")]:
         try:

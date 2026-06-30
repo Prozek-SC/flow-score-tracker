@@ -252,7 +252,7 @@ class TradierOptionsClient:
     BASE_URL = os.getenv("TRADIER_BASE_URL", "https://api.tradier.com/v1")
 
     def __init__(self):
-        self.api_key = os.getenv("TRADIER_API_KEY") or os.getenv("TRADIER_TOKEN")
+        self.api_key = (os.getenv("TRADIER_API_KEY") or os.getenv("TRADIER_TOKEN") or "").strip() or None
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
