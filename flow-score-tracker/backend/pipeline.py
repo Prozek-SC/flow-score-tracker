@@ -252,26 +252,33 @@ def score_tickers(ticker_sector_list: list) -> list:
         import time
         time.sleep(1.5)  # pause after Finviz HTTP requests
         equity_tickers = [t for t in tickers if len(t) <= 5]
-        if equity_tickers:
-            _, df_sma = (Query()
-                .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
-                .set_markets("america")
-                .where(tv_col("name").isin(equity_tickers))
-                .limit(len(equity_tickers) + 10)
-                .get_scanner_data()
-            )
-            sma_hit = 0
-            for _, row in df_sma.iterrows():
-                t = str(row["name"]).strip()
-                if t in fv_batch:
-                    fv_batch[t].update({
-                        "sma20":  round(float(row["SMA20"] or 0), 2),
-                        "sma50":  round(float(row["SMA50"] or 0), 2),
-                        "sma200": round(float(row["SMA200"] or 0), 2),
-                        "rsi":    float(row["RSI"] or 50),
-                    })
-                    sma_hit += 1
-            print(f"  Pipeline SMA: {sma_hit}/{len(equity_tickers)} tickers")
+        # Batch in chunks of 50 — a single query for a large universe silently
+        # caps rows, leaving many tickers without SMA (-> Trend 0 -> broken score).
+        sma_hit = 0
+        for bi in range(0, len(equity_tickers), 50):
+            batch = equity_tickers[bi:bi + 50]
+            try:
+                _, df_sma = (Query()
+                    .select("name", "close", "SMA20", "SMA50", "SMA200", "RSI", "High.52W", "Low.52W")
+                    .set_markets("america")
+                    .where(tv_col("name").isin(batch))
+                    .limit(len(batch) + 5)
+                    .get_scanner_data()
+                )
+                for _, row in df_sma.iterrows():
+                    t = str(row["name"]).strip()
+                    if t in fv_batch:
+                        fv_batch[t].update({
+                            "sma20":  round(float(row["SMA20"] or 0), 2),
+                            "sma50":  round(float(row["SMA50"] or 0), 2),
+                            "sma200": round(float(row["SMA200"] or 0), 2),
+                            "rsi":    float(row["RSI"] or 50),
+                        })
+                        sma_hit += 1
+                time.sleep(0.4)
+            except Exception as e:
+                print(f"  Pipeline SMA batch error: {e}")
+        print(f"  Pipeline SMA: {sma_hit}/{len(equity_tickers)} tickers")
     except Exception as e:
         print(f"  Pipeline SMA error: {e}")
 
@@ -309,6 +316,12 @@ def score_tickers(ticker_sector_list: list) -> list:
             ma50 = fv.get("sma50", 0)
             ma200 = fv.get("sma200", 0)
             ma20 = fv.get("sma20", price)  # use actual 20MA if available
+
+            # Skip names with no price/SMA data (fetch miss) — don't save a
+            # broken Trend-0 score that pollutes the board.
+            if not price or (not ma50 and not ma200):
+                print(f"  Skipping {ticker}: no price/SMA data")
+                continue
 
             try:
                 uw_flow = uw.get_flow_for_ticker(ticker)
