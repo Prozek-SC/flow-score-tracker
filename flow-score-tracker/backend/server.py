@@ -927,9 +927,14 @@ def ts_check():
     cid = os.getenv("TRADESTATION_CLIENT_ID")
     csec = os.getenv("TRADESTATION_CLIENT_SECRET")
     refresh = os.getenv("TRADESTATION_REFRESH_TOKEN")
+    trade_var_names = sorted(
+        k for k in os.environ
+        if any(s in k.upper() for s in ("TRADE", "TS_", "TOKEN", "OAUTH", "CLIENT"))
+    )
     out = {"vars_present": {"client_id": bool(cid), "client_secret": bool(csec),
                             "refresh_token": bool(refresh)},
-           "refresh_len": len(refresh) if refresh else 0}
+           "refresh_len": len(refresh) if refresh else 0,
+           "candidate_env_var_names": trade_var_names}
     if not (cid and csec and refresh):
         out["error"] = "missing one or more TRADESTATION_* variables"
         return jsonify(out), 400
