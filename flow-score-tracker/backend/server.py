@@ -920,6 +920,48 @@ def burst_trades():
 # OPTIONS CONTRACT QUALITY
 # ============================================================
 
+@app.route("/api/ts-chain-probe/<ticker>")
+def ts_chain_probe(ticker):
+    """Temporary: capture a few raw option-chain objects to learn TradeStation's shape."""
+    import os, requests, json as _json
+    from datetime import date, datetime
+    cid = os.getenv("TRADESTATION_CLIENT_ID"); csec = os.getenv("TRADESTATION_CLIENT_SECRET")
+    refresh = os.getenv("TRADESTATION_REFRESH_TOKEN")
+    tok = requests.post("https://signin.tradestation.com/oauth/token",
+        data={"grant_type": "refresh_token", "client_id": cid, "client_secret": csec,
+              "refresh_token": refresh}, timeout=12).json()
+    access = tok.get("access_token")
+    hdr = {"Authorization": f"Bearer {access}"}
+    sym = ticker.upper()
+    exps = requests.get(f"https://api.tradestation.com/v3/marketdata/options/expirations/{sym}",
+                        headers=hdr, timeout=12).json().get("Expirations", [])
+    today = date.today(); best, bestdiff = None, 1e9
+    for e in exps:
+        try:
+            d = (datetime.fromisoformat(e["Date"].replace("Z", "+00:00")).date() - today).days
+        except Exception:
+            continue
+        if abs(d - 44) < bestdiff:
+            bestdiff, best = abs(d - 44), e["Date"][:10]
+    out = {"symbol": sym, "expiration": best, "samples": []}
+    try:
+        with requests.get(f"https://api.tradestation.com/v3/marketdata/stream/options/chains/{sym}",
+                          headers=hdr, params={"expiration": best, "strikeProximity": "3"},
+                          stream=True, timeout=15) as s:
+            for line in s.iter_lines():
+                if not line:
+                    continue
+                try:
+                    out["samples"].append(_json.loads(line))
+                except Exception:
+                    continue
+                if len(out["samples"]) >= 4:
+                    break
+    except Exception as e:
+        out["stream_error"] = str(e)[:200]
+    return jsonify(out)
+
+
 @app.route("/api/ts-check")
 def ts_check():
     """Temporary: verify TradeStation creds — refresh the token, then a market-data call."""
