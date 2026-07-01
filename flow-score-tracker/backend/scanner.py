@@ -97,7 +97,7 @@ def get_nearest_expiration() -> str:
 # STEP 1: SECTOR ETF 200MA RANKING
 # ============================================================
 
-def get_top_sectors(top_n: int = 4):
+def get_top_sectors(top_n: int = 8):
     etf_tickers = list(SECTOR_ETFS.values())
 
     _, df = (Query()
@@ -172,7 +172,7 @@ def get_top_sectors(top_n: int = 4):
 # STEP 2: TOP 25 STOCKS PER SECTOR BY RS
 # ============================================================
 
-def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int = 25) -> list:
+def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int = 60) -> list:
     """
     50-Day Breakout Scanner filters applied within each top sector:
     - Optionable (options_volume > 1000)
@@ -197,13 +197,13 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
             .set_markets('america')
             .where(
                 col('sector').isin(tv_sectors),
-                col('market_cap_basic') > 1e9,
+                col('market_cap_basic') > 5e8,          # $500M+ (was $1B — catch mid/small)
                 col('exchange').isin(['NASDAQ', 'NYSE']),
                 col('is_primary') == True,
-                col('relative_volume_10d_calc') > 1,    # rel vol > 1
+                col('relative_volume_10d_calc') > 0.8,  # rel vol > 0.8 (was 1)
             )
             .order_by('Perf.3M', ascending=False)
-            .limit(200)
+            .limit(400)
             .get_scanner_data()
         )
     except Exception as e:
@@ -222,10 +222,12 @@ def get_top_stocks_for_sector(sector_name: str, etf_perf_3m: float, limit: int =
         avg_vol = safe_float(row.get('average_volume_10d_calc'))
         high_1m = safe_float(row.get('High.1M'))   # 1-month high ≈ 50-day high
 
-        # price within 3% of 1-month high (replicates Finviz "0-3% below 50-day high")
+        # within 8% of the 1-month high (was 3% — widen so score-jump names that
+        # aren't at the exact high still enter the scored universe; the Flow Score
+        # ranks them). TTI surfaces on score jump, not a strict 52w-high breakout.
         if high_1m > 0:
             pct_from_high = (high_1m - price) / high_1m * 100
-            if pct_from_high > 3.0:
+            if pct_from_high > 8.0:
                 continue
 
         stocks.append({
@@ -462,7 +464,7 @@ def get_top_sectors_finviz() -> tuple:
 
     sectors.sort(key=lambda x: x["selection_score"], reverse=True)
     print(f"  Finviz sector fallback: ranked {len(sectors)} sectors")
-    return sectors[:4], sectors
+    return sectors[:8], sectors
 
 
 def get_top_stocks_finviz(sector_name: str, etf_perf_3m: float, limit: int = 25) -> list:
@@ -656,7 +658,7 @@ def run_scanner() -> dict:
     # ── 50-DAY BREAKOUT: sector-filtered ──
     print("  Fetching sector ETF data...")
     try:
-        top_sectors, all_sectors = get_top_sectors(top_n=4)
+        top_sectors, all_sectors = get_top_sectors(top_n=8)
     except Exception as e:
         print(f"  Sector fetch error: {e}")
         top_sectors, all_sectors = [], []
