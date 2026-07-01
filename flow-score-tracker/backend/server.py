@@ -920,6 +920,46 @@ def burst_trades():
 # OPTIONS CONTRACT QUALITY
 # ============================================================
 
+@app.route("/api/ts-check")
+def ts_check():
+    """Temporary: verify TradeStation creds — refresh the token, then a market-data call."""
+    import os, requests
+    cid = os.getenv("TRADESTATION_CLIENT_ID")
+    csec = os.getenv("TRADESTATION_CLIENT_SECRET")
+    refresh = os.getenv("TRADESTATION_REFRESH_TOKEN")
+    out = {"vars_present": {"client_id": bool(cid), "client_secret": bool(csec),
+                            "refresh_token": bool(refresh)},
+           "refresh_len": len(refresh) if refresh else 0}
+    if not (cid and csec and refresh):
+        out["error"] = "missing one or more TRADESTATION_* variables"
+        return jsonify(out), 400
+    try:
+        r = requests.post(
+            "https://signin.tradestation.com/oauth/token",
+            data={"grant_type": "refresh_token", "client_id": cid,
+                  "client_secret": csec, "refresh_token": refresh},
+            headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=12,
+        )
+        out["token_refresh"] = {"status": r.status_code}
+        if r.status_code != 200:
+            out["token_refresh"]["body"] = r.text[:300]
+            return jsonify(out)
+        access = r.json().get("access_token")
+        out["token_refresh"]["got_access_token"] = bool(access)
+    except Exception as e:
+        out["token_refresh"] = {"error": str(e)[:200]}
+        return jsonify(out)
+    try:
+        m = requests.get(
+            "https://api.tradestation.com/v3/marketdata/options/expirations/SPY",
+            headers={"Authorization": f"Bearer {access}"}, timeout=12,
+        )
+        out["marketdata_SPY_expirations"] = {"status": m.status_code, "body": m.text[:400]}
+    except Exception as e:
+        out["marketdata_SPY_expirations"] = {"error": str(e)[:200]}
+    return jsonify(out)
+
+
 @app.route("/api/options-debug/<ticker>")
 def options_debug(ticker):
     """Temporary: probe Tradier prod + sandbox to find which the key works on."""
