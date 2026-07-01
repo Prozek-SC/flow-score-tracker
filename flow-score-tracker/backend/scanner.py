@@ -97,6 +97,45 @@ def get_nearest_expiration() -> str:
 # STEP 1: SECTOR ETF 200MA RANKING
 # ============================================================
 
+def get_sector_breadth() -> dict:
+    """
+    Breadth per sector = % of $500M+ optionable names above their 50-day MA.
+    A rotating sector's breadth surges before its ETF price confirms — the
+    earliest leadership signal. Validated 2026-07-01: correctly flagged
+    Financials + Health Care as the week's leaders where the ETF-price ranking
+    had put Financials at #9. Returns {sector_name: pct_above_50ma}.
+    """
+    from tradingview_screener import Query as _Q, col as _c
+    breadth = {}
+    for our_sector in SECTOR_ETFS:
+        tv_sectors = [k for k, v in TV_SECTOR_MAP.items() if v == our_sector]
+        if not tv_sectors:
+            continue
+        base = [_c('sector').isin(tv_sectors), _c('market_cap_basic') > 5e8,
+                _c('exchange').isin(['NASDAQ', 'NYSE']), _c('is_primary') == True]
+        try:
+            total, _ = _Q().select('name').where(*base).limit(1).get_scanner_data()
+            if not total:
+                continue
+            strong, _ = _Q().select('name').where(*base, _c('close') > _c('SMA50')).limit(1).get_scanner_data()
+            breadth[our_sector] = round(strong / total * 100, 1)
+        except Exception as e:
+            print(f"    Breadth error {our_sector}: {e}")
+    return breadth
+
+
+def _spy_perf():
+    """SPY 1M and 3M performance, for sector relative strength vs the market."""
+    from tradingview_screener import Query as _Q, col as _c
+    try:
+        _, df = _Q().select('name', 'Perf.1M', 'Perf.3M').where(_c('name') == 'SPY').limit(1).get_scanner_data()
+        if len(df):
+            return safe_float(df.iloc[0]['Perf.1M']), safe_float(df.iloc[0]['Perf.3M'])
+    except Exception as e:
+        print(f"    SPY perf error: {e}")
+    return 0.0, 0.0
+
+
 def get_top_sectors(top_n: int = 8):
     etf_tickers = list(SECTOR_ETFS.values())
 
@@ -151,20 +190,33 @@ def get_top_sectors(top_n: int = 8):
     except Exception:
         pass
 
+    # Breadth (% of the sector's names above their 50MA) + relative strength vs
+    # SPY are the leadership signals — they catch a rotation before the ETF price
+    # confirms. The stored ETF flow score is only a minor tiebreaker.
+    breadth = get_sector_breadth()
+    spy_1m, _ = _spy_perf()
+
     for s in sectors:
+        # Recent RS only (1M). 3M RS was dropped — it rewards last quarter's
+        # leaders (kept Tech #1 the week TTI showed it cratered to 11 names).
+        rs_1m = s["perf_1m"] - spy_1m
         stored = flow_map.get(s["sector"])
-        if stored is not None:
-            s["selection_score"] = stored
+        base = stored if stored is not None else (
+            (s["pct_from_200ma"] if s["above_200ma"] else s["pct_from_200ma"] - 20)
+            + s["perf_1m"] * 1.5)
+        b = breadth.get(s["sector"])
+        if b is not None:
+            s["breadth"] = b
+            # Validated 2026-07-01: this puts 5/5 TTI leaders in the top 8
+            # (Financials #9 -> #2, Tech -> #8).
+            s["selection_score"] = b + rs_1m * 1.5 + base * 0.15
         else:
-            # Composite fallback: trend (200MA position) + recent rotation (1M perf)
-            # perf_1m weight 1.5: a +5% 1M outperformance adds 7.5 composite pts,
-            # enough to elevate a rotating sector above a stale 200MA leader.
-            trend = s["pct_from_200ma"] if s["above_200ma"] else s["pct_from_200ma"] - 20
-            s["selection_score"] = trend + (s["perf_1m"] * 1.5)
+            s["selection_score"] = base
 
     sectors.sort(key=lambda x: x["selection_score"], reverse=True)
-    source = "flow_score" if flow_map else "composite(200MA+1M)"
+    source = "breadth+RS" if breadth else ("flow_score" if flow_map else "composite")
     print(f"  Sector ranking source: {source}")
+    print(f"  Top sectors: {[(s['sector'], s.get('breadth')) for s in sectors[:top_n]]}")
     return sectors[:top_n], sectors
 
 
