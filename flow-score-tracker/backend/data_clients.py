@@ -410,3 +410,145 @@ class EtfFlowClient:
             else:
                 print(f"  ETF snapshot {t}: missing aum/price")
         return out
+
+
+# ============================================================
+# TRADESTATION OPTIONS CLIENT
+# Live option chains with greeks. Normalizes to the same shape the grader
+# expects (option_type / strike / bid / ask / open_interest / volume /
+# greeks{delta, mid_iv}), so it's a drop-in for the Tradier client.
+# ============================================================
+
+class TradeStationClient:
+    SIGNIN = "https://signin.tradestation.com/oauth/token"
+    BASE = os.getenv("TRADESTATION_BASE_URL", "https://api.tradestation.com")
+
+    # Class-level token cache — survives across per-request instances.
+    _token = None
+    _token_exp = 0.0
+
+    def __init__(self):
+        self.client_id = (os.getenv("TRADESTATION_CLIENT_ID") or "").strip() or None
+        self.client_secret = (os.getenv("TRADESTATION_CLIENT_SECRET") or "").strip() or None
+        self.refresh_token = (os.getenv("TRADESTATION_REFRESH_TOKEN") or "").strip() or None
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.client_id and self.client_secret and self.refresh_token)
+
+    def _access_token(self):
+        import time
+        now = time.time()
+        if TradeStationClient._token and now < TradeStationClient._token_exp - 60:
+            return TradeStationClient._token
+        if not self.configured:
+            return None
+        try:
+            r = requests.post(self.SIGNIN, data={
+                "grant_type": "refresh_token", "client_id": self.client_id,
+                "client_secret": self.client_secret, "refresh_token": self.refresh_token,
+            }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=12)
+            if r.status_code != 200:
+                print(f"  TradeStation token refresh {r.status_code}: {r.text[:140]}")
+                return None
+            j = r.json()
+            TradeStationClient._token = j.get("access_token")
+            TradeStationClient._token_exp = now + int(j.get("expires_in", 1200))
+            return TradeStationClient._token
+        except Exception as e:
+            print(f"  TradeStation token error: {e}")
+            return None
+
+    def get_expirations(self, symbol: str) -> list:
+        token = self._access_token()
+        if not token:
+            return []
+        try:
+            r = requests.get(f"{self.BASE}/v3/marketdata/options/expirations/{symbol}",
+                             headers={"Authorization": f"Bearer {token}"}, timeout=10)
+            if r.status_code != 200:
+                print(f"  TradeStation expirations {symbol} {r.status_code}")
+                return []
+            return [e["Date"][:10] for e in r.json().get("Expirations", []) if e.get("Date")]
+        except Exception as e:
+            print(f"  TradeStation expirations error {symbol}: {e}")
+            return []
+
+    def pick_expiration(self, symbol: str, dte_target: int, dte_min: int, dte_max: int) -> str:
+        from datetime import date
+        today = date.today()
+        best, best_diff = None, 1e9
+        for e in self.get_expirations(symbol):
+            try:
+                dte = (date.fromisoformat(e) - today).days
+            except Exception:
+                continue
+            if dte < dte_min - 10:
+                continue
+            if abs(dte - dte_target) < best_diff:
+                best, best_diff = e, abs(dte - dte_target)
+        return best
+
+    @staticmethod
+    def _f(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _normalize(self, obj: dict) -> dict:
+        leg = (obj.get("Legs") or [{}])[0]
+        return {
+            "option_type": (leg.get("OptionType") or obj.get("Side") or "").lower(),
+            "symbol": leg.get("Symbol"),
+            "strike": self._f(leg.get("StrikePrice")),
+            "expiration_date": (leg.get("Expiration") or "")[:10],
+            "bid": self._f(obj.get("Bid")), "ask": self._f(obj.get("Ask")),
+            "last": self._f(obj.get("Last")),
+            "open_interest": int(obj.get("DailyOpenInterest") or 0),
+            "volume": int(obj.get("Volume") or 0),
+            "greeks": {"delta": self._f(obj.get("Delta")),
+                       "mid_iv": self._f(obj.get("ImpliedVolatility"))},
+        }
+
+    def get_option_chain(self, symbol: str, expiration: str, strike_proximity: int = 20) -> list:
+        """Stream the chain for one expiration, return normalized CALL contracts."""
+        import json as _json, time
+        token = self._access_token()
+        if not token:
+            return []
+        calls, seen = [], set()
+        start = time.time()
+        try:
+            with requests.get(
+                f"{self.BASE}/v3/marketdata/stream/options/chains/{symbol}",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"expiration": expiration, "strikeProximity": str(strike_proximity)},
+                stream=True, timeout=20,
+            ) as s:
+                for line in s.iter_lines():
+                    if time.time() - start > 14:      # overall time budget
+                        break
+                    if not line:
+                        continue
+                    try:
+                        obj = _json.loads(line)
+                    except Exception:
+                        continue
+                    if "Heartbeat" in obj or "Error" in obj or "StreamStatus" in obj:
+                        if calls:                     # snapshot delivered -> done
+                            break
+                        continue
+                    leg = (obj.get("Legs") or [{}])[0]
+                    if leg.get("OptionType") != "Call":
+                        continue
+                    strike = leg.get("StrikePrice")
+                    if strike in seen:                # stream looped -> snapshot done
+                        break
+                    seen.add(strike)
+                    calls.append(self._normalize(obj))
+                    if len(calls) >= strike_proximity * 2 + 1:
+                        break
+        except Exception as e:
+            print(f"  TradeStation chain error {symbol}: {e}")
+        return calls

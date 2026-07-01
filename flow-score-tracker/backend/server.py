@@ -1047,7 +1047,7 @@ def options_quality(ticker):
     the template DTE, pulls the live chain, and grades the contract at the
     target delta.
     """
-    from data_clients import TradierOptionsClient
+    from data_clients import TradierOptionsClient, TradeStationClient
     from scoring_engine import (
         choose_option_template, select_contract, grade_option_contract, OPTION_TEMPLATES,
     )
@@ -1070,22 +1070,31 @@ def options_quality(ticker):
     tmpl_key = choose_option_template(score, jump)
     t = OPTION_TEMPLATES[tmpl_key]
 
-    tr = TradierOptionsClient()
-    if not tr.api_key:
-        return jsonify({"ticker": ticker, "error": "TRADIER_API_KEY not configured"}), 503
+    # Provider: TradeStation when configured, else Tradier. Both expose
+    # pick_expiration / get_option_chain returning the grader's contract shape.
+    ts = TradeStationClient()
+    if ts.configured:
+        client, provider = ts, "tradestation"
+    else:
+        tr = TradierOptionsClient()
+        if not tr.api_key:
+            return jsonify({"ticker": ticker, "error": "no options data provider configured"}), 503
+        client, provider = tr, "tradier"
 
-    exp = tr.pick_expiration(ticker, t["dte_target"], t["dte_min"], t["dte_max"])
+    exp = client.pick_expiration(ticker, t["dte_target"], t["dte_min"], t["dte_max"])
     if not exp:
-        return jsonify({"ticker": ticker, "error": "no suitable expiration found"}), 404
+        return jsonify({"ticker": ticker, "provider": provider,
+                        "error": "no suitable expiration found"}), 404
 
-    chain = tr.get_option_chain(ticker, exp)
+    chain = client.get_option_chain(ticker, exp)
     contract = select_contract(chain, t["delta_target"])
     if not contract:
-        return jsonify({"ticker": ticker, "expiration": exp,
+        return jsonify({"ticker": ticker, "provider": provider, "expiration": exp,
                         "error": "no call with greeks in chain"}), 404
 
     graded = grade_option_contract(contract, tmpl_key)
-    graded.update({"ticker": ticker, "flow_score": score, "score_jump": jump, "expiration": exp})
+    graded.update({"ticker": ticker, "provider": provider, "flow_score": score,
+                   "score_jump": jump, "expiration": exp})
     return jsonify(graded)
 
 
