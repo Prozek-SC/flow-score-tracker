@@ -485,6 +485,12 @@ def run_weekly_flow_score():
             ma200 = fv.get("sma200", 0)
             ma20 = fv.get("sma20", price)  # use actual 20MA if available
 
+            # Skip names with no price/SMA data (fetch miss) — don't save a
+            # broken Trend-0 score.
+            if not price or (not ma50 and not ma200):
+                print(f"  Skipping {ticker}: no price/SMA data")
+                continue
+
             # Options flow
             uw_flow = {}
             uw_unusual = {}

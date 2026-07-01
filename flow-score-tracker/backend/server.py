@@ -779,8 +779,19 @@ def latest_scores():
     except Exception as e:
         print(f"  daily_scores merge error: {e}")
 
+    # Real-money safeguard: never surface a score computed without moving-average
+    # data (an SMA fetch miss leaves all MAs at 0 -> Trend 0 -> an unreliable
+    # score that isn't tradable). Drop these from the board entirely.
+    def _has_ma(row):
+        raw = ((row.get("pillars") or {}).get("trend") or {}).get("raw") or {}
+        return (raw.get("ma50") or 0) != 0 or (raw.get("ma200") or 0) != 0
+    clean = [r for r in seen.values() if _has_ma(r)]
+    dropped = len(seen) - len(clean)
+    if dropped:
+        print(f"  /api/scores/latest: dropped {dropped} scores with no MA data")
+
     # Sort by flow_score descending
-    scores = sorted(seen.values(), key=lambda x: x.get("flow_score", 0) or 0, reverse=True)
+    scores = sorted(clean, key=lambda x: x.get("flow_score", 0) or 0, reverse=True)
     # Sanitize NaN/Infinity values which break JSON serialization in browsers
     import math
     def sanitize(obj):
