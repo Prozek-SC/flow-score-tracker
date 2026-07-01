@@ -956,14 +956,18 @@ def ts_check():
     except Exception as e:
         out["token_refresh"] = {"error": str(e)[:200]}
         return jsonify(out)
-    try:
-        m = requests.get(
-            "https://api.tradestation.com/v3/marketdata/options/expirations/SPY",
-            headers={"Authorization": f"Bearer {access}"}, timeout=12,
-        )
-        out["marketdata_SPY_expirations"] = {"status": m.status_code, "body": m.text[:400]}
-    except Exception as e:
-        out["marketdata_SPY_expirations"] = {"error": str(e)[:200]}
+    hdr = {"Authorization": f"Bearer {access}"}
+    for label, url in [
+        ("prod_quotes", "https://api.tradestation.com/v3/marketdata/quotes/MSFT"),
+        ("sim_quotes", "https://sim.api.tradestation.com/v3/marketdata/quotes/MSFT"),
+        ("prod_opt_exp", "https://api.tradestation.com/v3/marketdata/options/expirations/MSFT"),
+        ("sim_opt_exp", "https://sim.api.tradestation.com/v3/marketdata/options/expirations/MSFT"),
+    ]:
+        try:
+            m = requests.get(url, headers=hdr, timeout=12)
+            out[label] = {"status": m.status_code, "body": m.text[:220]}
+        except Exception as e:
+            out[label] = {"error": str(e)[:180]}
     return jsonify(out)
 
 
