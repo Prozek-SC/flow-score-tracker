@@ -1,1007 +1,279 @@
-// Last updated: 2026-03-26 11:00 ET 
-import { useState, useEffect, useCallback, Fragment } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { useState, useEffect, useMemo } from "react";
+import "./cockpit.css";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
 
-// ============================================================
-// UTILITIES
-// ============================================================
-function tvLink(ticker) {
-  return `https://www.tradingview.com/chart/?symbol=${ticker}`;
-}
-
-// Server stores naive UTC strings (no Z). Append Z so the browser parses
-// as UTC, then display in Eastern Time.
-function toET(isoStr) {
-  if (!isoStr) return "";
-  const s = (isoStr.endsWith("Z") || isoStr.includes("+")) ? isoStr : isoStr + "Z";
-  return new Date(s).toLocaleString("en-US", {
-    timeZone: "America/New_York",
-    month: "short", day: "numeric",
-    hour: "numeric", minute: "2-digit",
-    hour12: true,
-  }) + " ET";
-}
-
-function scoreColor(score) {
-  if (score >= 80) return "#00d4aa";
-  if (score >= 65) return "#7fff7f";
-  if (score >= 50) return "#ffd700";
-  if (score >= 35) return "#ff9944";
-  return "#ff4444";
-}
-
-function gradeColor(grade) {
-  return { A: "#00d4aa", B: "#7fff7f", C: "#ffd700", D: "#ff9944", F: "#ff4444" }[grade] || "#888";
-}
-
-function fmt(num, decimals = 1) {
-  return Number(num || 0).toFixed(decimals);
-}
-
-function perfColor(val) {
-  if (val > 5) return "#00d4aa";
-  if (val > 0) return "#7fff7f";
-  if (val > -5) return "#ff9944";
-  return "#ff4444";
-}
-
-function btnStyle(bg, color) {
-  return {
-    background: bg, border: "none", borderRadius: 6, padding: "10px 16px",
-    color, fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600,
-    cursor: "pointer", letterSpacing: 0, transition: "opacity 0.2s",
-    whiteSpace: "nowrap"
-  };
-}
-
-// ============================================================
-// SHARED COMPONENTS
-// ============================================================
-function ScoreRing({ score, grade }) {
-  const radius = 40;
-  const circumference = 2 * Math.PI * radius;
-  const filled = (score / 100) * circumference;
-  const color = scoreColor(score);
-  return (
-    <div style={{ position: "relative", width: 100, height: 100, flexShrink: 0 }}>
-      <svg width={100} height={100} style={{ transform: "rotate(-90deg)" }}>
-        <circle cx={50} cy={50} r={radius} fill="none" stroke="#1a1a2e" strokeWidth={8} />
-        <circle cx={50} cy={50} r={radius} fill="none" stroke={color} strokeWidth={8}
-          strokeDasharray={`${filled} ${circumference - filled}`} strokeLinecap="round"
-          style={{ transition: "stroke-dasharray 0.8s ease" }} />
-      </svg>
-      <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
-        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-        <span style={{ fontSize: 22, fontWeight: 900, color, fontFamily: "'Inter', sans-serif" }}>{fmt(score, 0)}</span>
-        <span style={{ fontSize: 13, color, fontWeight: 700 }}>{grade}</span>
-      </div>
-    </div>
-  );
-}
-
-function SignalBar({ label, score, detail, weight }) {
-  const color = scoreColor(score);
-  return (
-    <div style={{ marginBottom: 10, padding: "10px 12px", background: "#070714",
-      borderRadius: 6, border: "1px solid #1a1a2e" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-        <span style={{ fontSize: 12, color: "#ccc", letterSpacing: 0.1, fontWeight: 600 }}>
-          {label}
-          <span style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>·{weight}%</span>
-        </span>
-        <span style={{ fontSize: 20, color, fontWeight: 900, fontFamily: "'Inter', sans-serif",
-          textShadow: `0 0 10px ${color}88` }}>{score}</span>
-      </div>
-      <div style={{ background: "#0a0a18", borderRadius: 4, height: 8, overflow: "hidden" }}>
-        <div style={{ background: `linear-gradient(90deg, ${color}88, ${color})`,
-          width: `${score}%`, height: "100%", borderRadius: 4,
-          transition: "width 0.6s ease", boxShadow: `0 0 8px ${color}66` }} />
-      </div>
-      {detail && <div style={{ fontSize: 12, color: "#aaa", marginTop: 5 }}>{detail}</div>}
-    </div>
-  );
-}
-
-// ============================================================
-// SCORES TAB COMPONENTS
-// ============================================================
-const SIGNAL_LABELS = {
-  capital_flow: "Capital Flow", trend: "Trend", momentum: "Momentum",
+// ---- thermal scale: capital as heat (color encodes the score) ----
+const lerp = (a, b, t) => a + (b - a) * t;
+const hex = (c) => {
+  c = c.replace("#", "");
+  return [parseInt(c.slice(0, 2), 16), parseInt(c.slice(2, 4), 16), parseInt(c.slice(4, 6), 16)];
 };
-const SIGNAL_WEIGHTS = { capital_flow: 40, trend: 30, momentum: 30 };
+const mix = (c1, c2, t) => {
+  const a = hex(c1), b = hex(c2);
+  return `rgb(${Math.round(lerp(a[0], b[0], t))},${Math.round(lerp(a[1], b[1], t))},${Math.round(lerp(a[2], b[2], t))})`;
+};
+const THERMAL = [
+  [0, "#243349"], [30, "#2A3C5C"], [42, "#34538C"], [55, "#6A5E9E"],
+  [66, "#8B6FB0"], [74, "#C77B45"], [82, "#E89B3C"], [92, "#F4D58D"], [100, "#FBEFC9"],
+];
+function thermal(s) {
+  s = Math.max(0, Math.min(100, s));
+  for (let i = 0; i < THERMAL.length - 1; i++) {
+    if (s <= THERMAL[i + 1][0]) {
+      const t = (s - THERMAL[i][0]) / (THERMAL[i + 1][0] - THERMAL[i][0]);
+      return mix(THERMAL[i][1], THERMAL[i + 1][1], t);
+    }
+  }
+  return THERMAL[THERMAL.length - 1][1];
+}
+const inkfor = (s) => (s >= 70 ? "#0c1722" : "#e9e6da");
+const gradeColor = (g) => ({ A: "#F4D58D", B: "#E89B3C", C: "#8B6FB0", D: "#5C7184", F: "#E2574C" }[g] || "#5C7184");
+const TIER = {
+  TIER_1_BURST: "Burst", TIER_2_NEAR_BURST: "Near burst", TIER_3_BIG_MOVE: "Big move",
+  TIER_4_HIGH_CONVICTION: "Conviction", FLOW_TRADE: "Flow",
+};
+const oiFmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
-function TickerCard({ data, onClick, isSelected }) {
-  const { ticker, flow_score, rating, label, price, pillars = {} } = data;
-  const parsedPillars = typeof pillars === "string" ? JSON.parse(pillars) : pillars;
+const normStock = (r) => {
+  const p = r.pillars || {};
+  const sc = (x) => Math.round((x && x.score) || 0);
+  return {
+    ticker: r.ticker, sector: r.sector || "",
+    score: Math.round(r.flow_score || 0),
+    cf: sc(p.capital_flow), trend: sc(p.trend), mom: sc(p.momentum),
+    jump: r.week_jump ?? null,
+    tier: (r.burst && r.burst.tier) || null,
+  };
+};
+const normSector = (r) => ({
+  sector: r.sector, etf: r.etf || "",
+  score: Math.round(r.flow_score || 0),
+  cf: Math.round(r.capital_flow || 0), trend: Math.round(r.trend || 0), mom: Math.round(r.momentum || 0),
+  flow: r.etf_flow_m || 0,
+});
+
+export default function App() {
+  const [tab, setTab] = useState("stocks");
+  const [stocks, setStocks] = useState(null);
+  const [sectors, setSectors] = useState(null);
+  const [error, setError] = useState(null);
+  const [grades, setGrades] = useState({});   // ticker -> {loading} | {data} | {error}
+  const [open, setOpen] = useState(null);
+
+  useEffect(() => {
+    Promise.all([
+      fetch(`${API_BASE}/api/scores/latest`).then((r) => r.json()),
+      fetch(`${API_BASE}/api/sectors/latest`).then((r) => r.json()).catch(() => []),
+    ])
+      .then(([s, sec]) => { setStocks(s || []); setSectors(sec || []); })
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  const rows = useMemo(
+    () => (stocks ? stocks.map(normStock).sort((a, b) => b.score - a.score) : []),
+    [stocks]
+  );
+  const secRows = useMemo(
+    () => (sectors ? sectors.map(normSector).sort((a, b) => b.score - a.score) : []),
+    [sectors]
+  );
+
+  const toggle = (ticker) => {
+    if (open === ticker) { setOpen(null); return; }
+    setOpen(ticker);
+    if (grades[ticker]) return;
+    setGrades((g) => ({ ...g, [ticker]: { loading: true } }));
+    fetch(`${API_BASE}/api/options/${ticker}`)
+      .then((r) => r.json())
+      .then((r) => setGrades((g) => ({ ...g, [ticker]: r.grade ? { data: r } : { error: r.error || "no tradable contract" } })))
+      .catch((e) => setGrades((g) => ({ ...g, [ticker]: { error: String(e) } })));
+  };
+
+  if (error) return <Shell><div className="center">Couldn't reach the Flow Score API.<br />{error}</div></Shell>;
+  if (!stocks || !sectors) return <Shell><div className="center">Reading the tape&hellip;</div></Shell>;
+
+  const above = rows.filter((s) => s.score >= 70).length;
+  const bursts = rows.filter((s) => s.tier === "TIER_1_BURST").length;
+  const lead = rows[0];
+  const leadSectors = secRows.filter((s) => s.score >= 60).slice(0, 3);
 
   return (
-    <div onClick={() => onClick(data)}
-      style={{ background: isSelected ? "#0f0f28" : "#0a0a18",
-        border: `1px solid ${isSelected ? "#00d4aa44" : "#1a1a2e"}`,
-        borderRadius: 8, padding: 20, cursor: "pointer", transition: "all 0.2s ease",
-        boxShadow: isSelected ? "0 0 20px #00d4aa22" : "none" }}
-      onMouseEnter={e => e.currentTarget.style.borderColor = "#00d4aa44"}
-      onMouseLeave={e => e.currentTarget.style.borderColor = isSelected ? "#00d4aa44" : "#1a1a2e"}>
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
-        <ScoreRing score={flow_score || 0} grade={rating || "F"} />
-        <div style={{ flex: 1 }}>
-          <a href={tvLink(ticker)} target="_blank" rel="noreferrer"
-            style={{ fontSize: 22, fontWeight: 900, color: "#00d4aa", fontFamily: "'Inter', sans-serif",
-              textDecoration: "none", display: "block" }}
-            onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
-            onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
-            {ticker} ↗
-          </a>
-          <div style={{ fontSize: 13, color: "#888" }}>${fmt(price, 2)}</div>
-          <div style={{ display: "inline-block", marginTop: 6, padding: "2px 8px",
-            background: `${gradeColor(rating)}22`, borderRadius: 4,
-            fontSize: 11, color: gradeColor(rating), fontWeight: 700, letterSpacing: 0 }}>{label}</div>
+    <Shell>
+      <header>
+        <div className="brand">
+          <div className="ey">TTI / Flow Score System / The Hit List</div>
+          <h1>The Flow Map<span className="dim"> / </span><span className="dim">{tab === "sectors" ? "sectors" : "stocks"}</span></h1>
         </div>
+        <div className="gauge">
+          {lead && <div className="g"><div className="n" style={{ color: thermal(lead.score) }}>{lead.score}</div><div className="l">{lead.ticker} tops</div></div>}
+          <div className="g"><div className="n">{above}</div><div className="l">score 70+</div></div>
+          <div className="g"><div className="n" style={{ color: "var(--amber)" }}>{bursts}</div><div className="l">burst triggers</div></div>
+        </div>
+      </header>
+
+      <nav>
+        {["stocks", "sectors"].map((t) => (
+          <button key={t} className={`tab${tab === t ? " on" : ""}`} onClick={() => setTab(t)}>{t}</button>
+        ))}
+      </nav>
+
+      {tab === "stocks" && (
+        rows.length === 0
+          ? <div className="center">No scored stocks yet &mdash; the weekly pipeline hasn't run.</div>
+          : <Stocks rows={rows} grades={grades} open={open} toggle={toggle} leadSectors={leadSectors} />
+      )}
+      {tab === "sectors" && (
+        secRows.length === 0
+          ? <div className="center">No sector data yet.</div>
+          : <Sectors rows={secRows} />
+      )}
+    </Shell>
+  );
+}
+
+const Shell = ({ children }) => <div className="app"><div className="wrap">{children}</div></div>;
+
+const Bars = ({ cf, trend, mom }) => (
+  <div className="bars" title={`CF ${cf}/40 · Trend ${trend}/30 · Mom ${mom}/30`}>
+    {[["cf", cf, 40, "var(--amber)"], ["t", trend, 30, "var(--violet)"], ["m", mom, 30, "var(--slate)"]].map(
+      ([k, v, mx, col]) => <i key={k} style={{ height: 4 + (v / mx) * 22, background: col }} />
+    )}
+  </div>
+);
+
+// ============================ STOCKS ============================
+function Stocks({ rows, grades, open, toggle, leadSectors }) {
+  return (
+    <section>
+      <div className="sub">
+        Every scored name, ranked by Flow Score. Click a row to grade the options contract to buy &mdash; liquidity, delta, IV, and the double target.
       </div>
-      <div>
-        {Object.entries(SIGNAL_LABELS).map(([key, labelText]) => {
-          const s = parsedPillars[key] || {};
-          return <SignalBar key={key} label={labelText} score={s.score || 0}
-            detail={s.detail || ""} weight={SIGNAL_WEIGHTS[key]} />;
+      {leadSectors.length > 0 && (
+        <div className="chips">
+          <span className="chip">leading sectors</span>
+          {leadSectors.map((s) => (
+            <span className="chip" key={s.sector}><b style={{ color: thermal(s.score) }}>{s.sector}</b> {s.score}</span>
+          ))}
+        </div>
+      )}
+      <div className="board">
+        {rows.map((s, i) => {
+          const g = grades[s.ticker];
+          const jc = s.jump > 0 ? "var(--pos)" : s.jump < 0 ? "var(--neg)" : "var(--ink-faint)";
+          return (
+            <div className={`brow${open === s.ticker ? " open" : ""}`} key={s.ticker}>
+              <div className="bmain" onClick={() => toggle(s.ticker)}>
+                <div className="rk">{String(i + 1).padStart(2, "0")}</div>
+                <div className="tk"><b>{s.ticker}</b><span className="sec">{s.sector}</span></div>
+                <div className="bmid">
+                  <Bars cf={s.cf} trend={s.trend} mom={s.mom} />
+                  {s.tier && TIER[s.tier] && <div className="tier">{TIER[s.tier]}</div>}
+                  <div className="jump" style={{ color: jc }}>{s.jump == null ? "·" : s.jump > 0 ? `+${s.jump}` : s.jump}</div>
+                </div>
+                <div className="bright">
+                  <div className="bsc" style={{ color: thermal(s.score) }}>{s.score}</div>
+                  <GradeChip state={g} />
+                </div>
+              </div>
+              {open === s.ticker && <ContractPanel state={g || { loading: true }} />}
+            </div>
+          );
         })}
       </div>
-    </div>
+    </section>
   );
 }
 
-function HistoryChart({ ticker }) {
-  const [history, setHistory] = useState([]);
-  useEffect(() => {
-    if (!ticker) return;
-    fetch(`${API_BASE}/api/scores/history/${ticker}`).then(r => r.json()).then(setHistory).catch(() => {});
-  }, [ticker]);
-  if (!history.length) return (
-    <div style={{ color: "#888", textAlign: "center", padding: 32, fontSize: 12 }}>No history yet</div>
-  );
-  return (
-    <ResponsiveContainer width="100%" height={200}>
-      <LineChart data={history} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-        <CartesianGrid stroke="#1a1a2e" strokeDasharray="3 3" />
-        <XAxis dataKey="date" tick={{ fill: "#555", fontSize: 11 }} tickFormatter={d => d.slice(5)} />
-        <YAxis domain={[0, 100]} tick={{ fill: "#555", fontSize: 11 }} />
-        <Tooltip contentStyle={{ background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 6 }}
-          labelStyle={{ color: "#888" }} itemStyle={{ color: "#00d4aa" }} />
-        <Line type="monotone" dataKey="flow_score" stroke="#00d4aa" strokeWidth={2}
-          dot={{ fill: "#00d4aa", r: 3 }} name="Score" />
-      </LineChart>
-    </ResponsiveContainer>
-  );
+function GradeChip({ state }) {
+  if (!state) return <div className="gradechip pending">–</div>;
+  if (state.loading) return <div className="gradechip load">…</div>;
+  if (state.error) return <div className="gradechip err">–</div>;
+  const g = state.data.grade;
+  return <div className="gradechip" style={{ background: gradeColor(g) }}>{g}</div>;
 }
 
-// ============================================================
-// SCANNER TAB COMPONENTS
-// ============================================================
-function SectorCard({ sector, isSelected, onClick }) {
-  const color = sector.above_200ma ? "#00d4aa" : "#ff4444";
+function ContractPanel({ state }) {
+  if (state.loading) return <div className="contract"><div className="cerr">Grading the chain&hellip;</div></div>;
+  if (state.error) return <div className="contract"><div className="cerr">No clean contract — {state.error}</div></div>;
+  const d = state.data, c = d.contract;
   return (
-    <div onClick={onClick}
-      style={{ background: isSelected ? "#0f0f28" : "#0a0a18",
-        border: `1px solid ${isSelected ? "#00d4aa44" : "#1a1a2e"}`,
-        borderRadius: 8, padding: 20, cursor: "pointer", transition: "all 0.2s ease" }}
-      onMouseEnter={e => e.currentTarget.style.borderColor = "#00d4aa44"}
-      onMouseLeave={e => e.currentTarget.style.borderColor = isSelected ? "#00d4aa44" : "#1a1a2e"}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <div>
-          <div style={{ fontSize: 11, color: "#aaa", letterSpacing: 0.2, textTransform: "uppercase", marginBottom: 4 }}>
-            {sector.etf}
-          </div>
-          <div style={{ fontSize: 18, fontWeight: 900, color: "#fff" }}>{sector.sector}</div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 11, color, fontWeight: 700, letterSpacing: 0 }}>
-            {sector.above_200ma ? "▲ ABOVE 200MA" : "▼ BELOW 200MA"}
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 900, color, fontFamily: "'Inter', sans-serif", marginTop: 4 }}>
-            {sector.pct_from_200ma > 0 ? "+" : ""}{fmt(sector.pct_from_200ma)}%
-          </div>
-        </div>
+    <div className="contract">
+      <div className="cmeta">
+        <span><span className="k">contract</span> {c.symbol}</span>
+        <span><span className="k">delta</span> {c.delta}</span>
+        <span><span className="k">IV</span> {c.iv}%</span>
+        <span><span className="k">mid</span> ${c.mid}</span>
+        <span><span className="k">double</span> ${c.double}</span>
+        <span><span className="k">OI</span> {oiFmt(c.open_interest)}</span>
+        <span><span className="k">exp</span> {d.expiration}</span>
+        <span><span className="k">plan</span> {d.template}</span>
       </div>
-      <div style={{ display: "flex", gap: 20, marginTop: 16 }}>
-        <div>
-          <div style={{ fontSize: 12, color: "#888", letterSpacing: 0 }}>PRICE</div>
-          <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "'Inter', sans-serif", color: "#fff" }}>
-            ${fmt(sector.price, 2)}
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: "#888", letterSpacing: 0 }}>200MA</div>
-          <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "'Inter', sans-serif", color: "#888" }}>
-            ${fmt(sector.ma200, 2)}
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: "#888", letterSpacing: 0 }}>3M PERF</div>
-          <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "'Inter', sans-serif", color: perfColor(sector.perf_3m) }}>
-            {sector.perf_3m > 0 ? "+" : ""}{fmt(sector.perf_3m)}%
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: "#888", letterSpacing: 0 }}>1M PERF</div>
-          <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "'Inter', sans-serif", color: perfColor(sector.perf_1m) }}>
-            {sector.perf_1m > 0 ? "+" : ""}{fmt(sector.perf_1m)}%
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StockRow({ stock, rank, sector, onAdd, added, showSector = false, accentColor = "#00d4aa" }) {
-  const rsColor = perfColor(stock.rs_vs_etf);
-  const nameOrSector = showSector
-    ? (stock.sector || "—")
-    : (stock.name || stock.ticker);
-
-  return (
-    <div style={{ display: "grid",
-      gridTemplateColumns: showSector
-        ? "36px 90px 1fr 80px 70px 80px 80px 80px 70px 90px"
-        : "36px 90px 1fr 80px 80px 80px 80px 80px 70px 90px",
-      gap: 10, padding: "14px 18px", borderBottom: "1px solid #0f0f1e",
-      alignItems: "center", transition: "background 0.15s" }}
-      onMouseEnter={e => e.currentTarget.style.background = "#0a0a18"}
-      onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-      {/* Rank */}
-      <div style={{ fontSize: 14, color: "#888", fontFamily: "'Inter', sans-serif" }}>{rank}</div>
-
-      {/* Ticker + price */}
-      <div>
-        <a href={tvLink(stock.ticker)} target="_blank" rel="noreferrer"
-          style={{ fontSize: 15, fontWeight: 900, color: accentColor, fontFamily: "'Inter', sans-serif", textDecoration: "none" }}
-          onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
-          onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
-          {stock.ticker} ↗
-        </a>
-        <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>${fmt(stock.price, 2)}</div>
-      </div>
-
-      {/* Name or Sector */}
-      <div style={{ fontSize: 13, color: "#888", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-        {nameOrSector}
-      </div>
-
-      {/* Flow score */}
-      <div style={{ textAlign: "right" }}>
-        {stock.flow_score != null ? (
-          <div style={{ fontSize: 15, fontWeight: 900, fontFamily: "'Inter', sans-serif", color: scoreColor(stock.flow_score) }}>
-            {fmt(stock.flow_score, 0)}
-          </div>
-        ) : (
-          <div style={{ fontSize: 12, color: "#444" }}>—</div>
-        )}
-      </div>
-
-      {/* RS vs ETF (or 3M for BBS) */}
-      <div style={{ textAlign: "right" }}>
-        {stock.rs_vs_etf != null ? (
-          <div style={{ fontSize: 15, fontWeight: 700, fontFamily: "'Inter', sans-serif", color: rsColor }}>
-            {stock.rs_vs_etf > 0 ? "+" : ""}{fmt(stock.rs_vs_etf)}%
-          </div>
-        ) : <div style={{ fontSize: 12, color: "#444" }}>—</div>}
-      </div>
-
-      {/* 3M perf */}
-      <div style={{ textAlign: "right" }}>
-        {stock.perf_3m != null ? (
-          <div style={{ fontSize: 15, fontFamily: "'Inter', sans-serif", color: perfColor(stock.perf_3m) }}>
-            {stock.perf_3m > 0 ? "+" : ""}{fmt(stock.perf_3m)}%
-          </div>
-        ) : <div style={{ fontSize: 12, color: "#444" }}>—</div>}
-        <div style={{ fontSize: 11, color: "#666" }}>3M</div>
-      </div>
-
-      {/* 1M perf */}
-      <div style={{ textAlign: "right" }}>
-        {stock.perf_1m != null ? (
-          <div style={{ fontSize: 15, fontFamily: "'Inter', sans-serif", color: perfColor(stock.perf_1m) }}>
-            {stock.perf_1m > 0 ? "+" : ""}{fmt(stock.perf_1m)}%
-          </div>
-        ) : <div style={{ fontSize: 12, color: "#444" }}>—</div>}
-        <div style={{ fontSize: 11, color: "#666" }}>1M</div>
-      </div>
-
-      {/* MA badge */}
-      <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 12, fontWeight: 700,
-          color: stock.above_200ma ? "#00d4aa" : "#ff4444",
-          background: stock.above_200ma ? "#00d4aa11" : "#ff444411",
-          padding: "3px 8px", borderRadius: 4 }}>
-          {stock.above_200ma ? "▲200" : "▼200"}
-        </div>
-      </div>
-
-      {/* Market cap */}
-      <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 15, fontFamily: "'Inter', sans-serif", color: "#aaa" }}>
-          {stock.mktcap_b != null ? `$${fmt(stock.mktcap_b, 1)}B` : "—"}
-        </div>
-      </div>
-
-      {/* Add to watchlist */}
-      <div style={{ textAlign: "center" }}>
-        <button
-          onClick={e => { e.stopPropagation(); onAdd(stock.ticker, sector); }}
-          disabled={added}
-          style={{ fontSize: 12, fontWeight: 700, cursor: added ? "default" : "pointer",
-            color: added ? accentColor : "#888",
-            background: added ? accentColor + "11" : "#1a1a2e",
-            border: `1px solid ${added ? accentColor + "44" : "#2a2a3e"}`,
-            borderRadius: 4, padding: "5px 10px", fontFamily: "'Inter', sans-serif" }}>
-          {added ? "✓" : "+ WL"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function UnusualActivityBadge({ item }) {
-  const color = item.bias === "bullish" ? "#00d4aa" : "#ff4444";
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px",
-      background: "#0a0a18", border: `1px solid ${color}22`, borderRadius: 6, marginBottom: 8 }}>
-      <div style={{ fontSize: 16, fontWeight: 900, fontFamily: "'Inter', sans-serif", color: "#fff", minWidth: 60 }}>
-        {item.ticker}
-      </div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 12, color: "#aaa" }}>
-          Vol: {item.total_volume?.toLocaleString()} · OI: {item.total_oi?.toLocaleString()}
-        </div>
-      </div>
-      <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 13, fontWeight: 900, fontFamily: "'Inter', sans-serif", color }}>
-          {fmt(item.vol_oi_ratio)}x
-        </div>
-        <div style={{ fontSize: 11, color, fontWeight: 700, letterSpacing: 0 }}>
-          {item.bias?.toUpperCase()}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ScannerTab({ scannerType = "breakout", watchlistTickers = new Set(), onWatchlistChange }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [scanStatus, setScanStatus] = useState(null);
-  const [selectedSector, setSelectedSector] = useState(null);
-  const [lastRun, setLastRun] = useState(null);
-  const [cacheNotice, setCacheNotice] = useState(null);
-
-  const isBreakout = scannerType === "breakout";
-
-  const addToWatchlist = async (ticker, sector) => {
-    try {
-      await fetch(`${API_BASE}/api/watchlist`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker, sector: sector || "" })
-      });
-      if (onWatchlistChange) onWatchlistChange();
-    } catch (e) { console.error(e); }
-  };
-
-  const fetchResults = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/scanner/results`);
-      const json = await res.json();
-      if (json.success && json.data) {
-        setData(json.data);
-        setLastRun(json.data.run_at || json.run_date);
-        setCacheNotice(json.cache_notice || null);
-        if (isBreakout && json.data.top_sectors?.length > 0) {
-          setSelectedSector(prev => prev || json.data.top_sectors[0].sector);
-        }
-        return json.data;
-      }
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-    return null;
-  }, [isBreakout]);
-
-  useEffect(() => { fetchResults(); }, [fetchResults]);
-
-  const runScan = async () => {
-    setRunning(true);
-    setScanStatus("Scanning markets...");
-    try {
-      const runRes = await fetch(`${API_BASE}/api/scanner/run`, { method: "POST" });
-      const runJson = await runRes.json();
-      if (runJson.cached) {
-        await fetchResults();
-        setRunning(false);
-        setScanStatus(null);
-        return;
-      }
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        attempts++;
-        if (attempts <= 1) setScanStatus("Fetching stocks...");
-        else setScanStatus(`Scoring top stocks... (${attempts * 15}s)`);
-        const latest = await fetchResults();
-        const breakoutHasScores = Object.values(latest?.sector_stocks || {}).flat().some(s => s.flow_score != null);
-        const bbsHasScores = (latest?.big_blue_sky || []).some(s => s.flow_score != null);
-        const hasScores = breakoutHasScores || bbsHasScores;
-        if (hasScores || attempts >= 12) {
-          clearInterval(poll);
-          setRunning(false);
-          setScanStatus(null);
-        }
-      }, 15000);
-    } catch (e) { setRunning(false); setScanStatus(null); }
-  };
-
-  const breakoutStocks = selectedSector && data?.sector_stocks?.[selectedSector] || [];
-  const bbsStocks = data?.big_blue_sky || [];
-  const unusual = data?.unusual_activity || [];
-
-  const scanLabel = isBreakout ? "50-Day Breakout Scanner" : "Big Blue Sky Scanner";
-  const scanDesc = isBreakout
-    ? "Top 3 sectors by 200MA strength · Optionable · Near 52W High · Above 50MA"
-    : "Mid-cap & under · New 52W High · Above 50MA · Optionable";
-  const accentColor = isBreakout ? "#00d4aa" : "#7b9fff";
-
-  return (
-    <div>
-      {/* Scanner header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 900, color: "#fff", marginBottom: 4 }}>{scanLabel}</div>
-          <div style={{ fontSize: 13, color: "#888" }}>{scanDesc}</div>
-          {lastRun && (
-            <div style={{ fontSize: 12, color: "#555", marginTop: 4, display: "flex", alignItems: "center", gap: 8 }}>
-              Last run: {toET(lastRun)}
-              {data?.data_source === "finviz" && (
-                <span style={{ fontSize: 10, background: "#1a1a2e", color: "#7b9fff", border: "1px solid #7b9fff44", borderRadius: 4, padding: "2px 6px", letterSpacing: 1 }}>
-                  FINVIZ
-                </span>
-              )}
-              {data?.data_source === "tradingview" && (
-                <span style={{ fontSize: 10, background: "#1a1a2e", color: "#00d4aa", border: "1px solid #00d4aa44", borderRadius: 4, padding: "2px 6px", letterSpacing: 1 }}>
-                  LIVE
-                </span>
-              )}
-            </div>
-          )}
-          {cacheNotice && (
-            <div style={{ fontSize: 12, color: "#ffd700", marginTop: 6, background: "#1a1500", border: "1px solid #ffd70044", borderRadius: 6, padding: "6px 10px", display: "inline-block" }}>
-              📅 {cacheNotice.replace(/\d{4}-\d{2}-\d{2}T[\d:Z+.-]+/, ts => toET(ts))}
-            </div>
-          )}
-          {scanStatus && !cacheNotice && (
-            <div style={{ fontSize: 13, color: accentColor, marginTop: 6, letterSpacing: 0 }}>
-              ⏳ {scanStatus}
-            </div>
-          )}
-        </div>
-        <button onClick={runScan} disabled={running}
-          style={btnStyle(running ? "#1a1a2e" : accentColor, running ? "#555" : "#000")}>
-          {running ? "⟳ Scanning..." : `▶ Run Scanner`}
-        </button>
-      </div>
-
-      {loading && (
-        <div style={{ textAlign: "center", color: accentColor, padding: 60, fontSize: 14, letterSpacing: 0 }}>
-          Loading results...
-        </div>
-      )}
-
-      {!loading && !data && (
-        <div style={{ textAlign: "center", padding: 80 }}>
-          <div style={{ fontSize: 16, color: "#aaa", marginBottom: 16 }}>No results yet</div>
-          <div style={{ fontSize: 13, color: "#888", marginBottom: 24 }}>Click "Run Scanner" to start</div>
-          <button onClick={runScan} style={btnStyle(accentColor, "#000")}>▶ Run Scanner</button>
-        </div>
-      )}
-
-      {!loading && data && (
-        <div style={{ display: "grid", gridTemplateColumns: unusual.length > 0 ? "1fr 300px" : "1fr", gap: 24 }}>
-          <div>
-
-            {/* ── 50-DAY BREAKOUT: sector cards + sector stock table ── */}
-            {isBreakout && (
-              <>
-                <div style={{ fontSize: 12, color: "#888", letterSpacing: 0.2, marginBottom: 12, textTransform: "uppercase" }}>
-                  Top Sectors — Above 200MA
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12, marginBottom: 28 }}>
-                  {data.top_sectors?.map(s => (
-                    <SectorCard key={s.sector} sector={s}
-                      isSelected={selectedSector === s.sector}
-                      onClick={() => setSelectedSector(s.sector)} />
-                  ))}
-                </div>
-
-                {selectedSector && (
-                  <>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                      <div style={{ fontSize: 13, color: "#aaa", letterSpacing: 0.2, textTransform: "uppercase" }}>
-                        {selectedSector} · Near 52W High · Above 50MA
-                      </div>
-                      <div style={{ fontSize: 12, color: "#888" }}>{breakoutStocks.length} stocks</div>
-                    </div>
-                    <StockTable stocks={breakoutStocks} sector={selectedSector}
-                      watchlistTickers={watchlistTickers} onAdd={addToWatchlist}
-                      showRsLabel="RS vs ETF" accentColor={accentColor} />
-                  </>
-                )}
-              </>
-            )}
-
-            {/* ── BIG BLUE SKY: flat stock list ── */}
-            {!isBreakout && (
-              <>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                  <div style={{ fontSize: 13, color: "#aaa", letterSpacing: 0.2, textTransform: "uppercase" }}>
-                    New 52W Highs · Mid-Cap & Under
-                  </div>
-                  <div style={{ fontSize: 12, color: "#888" }}>{bbsStocks.length} stocks</div>
-                </div>
-                {bbsStocks.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "40px 0", color: "#888", fontSize: 14 }}>
-                    No results yet — run the scanner
-                  </div>
-                ) : (
-                  <StockTable stocks={bbsStocks} sector={null}
-                    watchlistTickers={watchlistTickers} onAdd={addToWatchlist}
-                    showRsLabel="3M Perf" accentColor={accentColor} showSector={true} />
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Unusual activity panel */}
-          {unusual.length > 0 && (
-            <div>
-              <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 0.2, marginBottom: 12, textTransform: "uppercase" }}>
-                ⚡ Unusual Options Activity
-              </div>
-              <div style={{ background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 8, padding: 16 }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 12, lineHeight: 1.6 }}>
-                  Vol/OI {'>'} 2.0 · New money signal
-                </div>
-                {unusual.map(item => <UnusualActivityBadge key={item.ticker} item={item} />)}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Shared stock table used by both scanners
-function StockTable({ stocks, sector, watchlistTickers, onAdd, showRsLabel, accentColor, showSector = false }) {
-  const sorted = [...stocks].sort((a, b) => {
-    const aScore = a.flow_score ?? -999;
-    const bScore = b.flow_score ?? -999;
-    if (bScore !== aScore) return bScore - aScore;
-    return (a.ticker || "").localeCompare(b.ticker || "");
-  });
-  return (
-    <div style={{ background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 8, overflow: "hidden" }}>
-      <div style={{ display: "grid",
-        gridTemplateColumns: showSector
-          ? "36px 90px 1fr 80px 70px 80px 80px 80px 70px 90px"
-          : "36px 90px 1fr 80px 80px 80px 80px 80px 70px 90px",
-        gap: 10, padding: "12px 18px", borderBottom: "1px solid #1a1a2e", background: "#0d0d1a" }}>
-        {["#", "TICKER", showSector ? "SECTOR" : "NAME", "SCORE", showRsLabel, "3M", "1M", "MA", "MKT CAP", ""].map((h, i) => (
-          <div key={i} style={{ fontSize: 11, color: "#666", letterSpacing: 0.1, textTransform: "uppercase",
-            textAlign: ["SCORE", showRsLabel, "3M", "1M", "MKT CAP"].includes(h) ? "right" : "left" }}>
-            {h}
+      {d.recommendation && <div className="crec">{d.recommendation}</div>}
+      <div className="cchecks">
+        {d.checks.map((ck, i) => (
+          <div className="ck" key={i}>
+            <span className={"ico " + (ck.pass ? "ok" : "no")}>{ck.pass ? "✓" : "✕"}</span>
+            <span className="cname">{ck.name}</span>
+            <span className="cdet">{ck.detail}</span>
           </div>
         ))}
       </div>
-      {sorted.length === 0 ? (
-        <div style={{ padding: 32, textAlign: "center", color: "#888", fontSize: 14 }}>No stocks found</div>
-      ) : (
-        sorted.map((s, i) => (
-          <StockRow key={s.ticker} stock={s} rank={i + 1} sector={sector || s.sector}
-            onAdd={onAdd} added={watchlistTickers.has(s.ticker)}
-            showSector={showSector} accentColor={accentColor} />
-        ))
-      )}
     </div>
   );
 }
 
-// ============================================================
-// MAIN APP
-// ============================================================
-export default function App() {
-  const [scores, setScores] = useState([]);
-  const [watchlist, setWatchlist] = useState([]);
-  const [selectedTicker, setSelectedTicker] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [newTicker, setNewTicker] = useState("");
-  const [newSector, setNewSector] = useState("");
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [tab, setTab] = useState("breakout");
-
-  const fetchScores = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/scores/latest`);
-      const data = await res.json();
-      setScores(Array.isArray(data) ? data : []);
-      setLastUpdated(new Date());
-    } catch (e) { console.error(e); setScores([]); }
-    finally { setLoading(false); }
-  }, []);
-
-  const fetchWatchlist = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/watchlist`);
-      setWatchlist(await res.json());
-    } catch (e) {}
-  }, []);
-
-  useEffect(() => { fetchScores(); fetchWatchlist(); }, [fetchScores, fetchWatchlist]);
-
-  const addTicker = async () => {
-    if (!newTicker.trim()) return;
-    await fetch(`${API_BASE}/api/watchlist`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ticker: newTicker.trim().toUpperCase(), sector: newSector.trim() })
-    });
-    setNewTicker(""); setNewSector(""); fetchWatchlist();
-  };
-
-  const removeTicker = async (ticker) => {
-    await fetch(`${API_BASE}/api/watchlist/${ticker}`, { method: "DELETE" });
-    fetchWatchlist();
-  };
-
-  const [scanning, setScanning] = useState(false);
-  const [scanningMarket, setScanningMarket] = useState(false);
-  const [scoringDaily, setScoringDaily] = useState(false);
-
-  const runDailyScore = async () => {
-    setScoringDaily(true);
-    try {
-      await fetch(`${API_BASE}/api/scores/daily-run`, { method: "POST" });
-      // Poll for ~60s then refresh
-      setTimeout(async () => {
-        await fetchScores();
-        setScoringDaily(false);
-      }, 60000);
-    } catch (e) { setScoringDaily(false); }
-  };
-
-  const runScan = async () => {
-    setScanning(true);
-    try {
-      await fetch(`${API_BASE}/api/scan/weekly`, { method: "POST" });
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        attempts++;
-        await fetchScores();
-        if (attempts >= 8) { clearInterval(poll); setScanning(false); }
-      }, 10000);
-    } catch (e) { setScanning(false); }
-  };
-
-  const runBothScanners = async () => {
-    setScanningMarket(true);
-    try {
-      await fetch(`${API_BASE}/api/scanner/run`, { method: "POST" });
-      // Poll until scores appear
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        attempts++;
-        try {
-          const res = await fetch(`${API_BASE}/api/scanner/results`);
-          const json = await res.json();
-          const data = json.data || {};
-          const hasScores =
-            Object.values(data.sector_stocks || {}).flat().some(s => s.flow_score != null) ||
-            (data.big_blue_sky || []).some(s => s.flow_score != null);
-          if (hasScores || attempts >= 12) {
-            clearInterval(poll);
-            setScanningMarket(false);
-          }
-        } catch { }
-      }, 15000);
-    } catch (e) { setScanningMarket(false); }
-  };
-
-  const tabs = [
-    { id: "breakout", label: "50-Day Breakout" },
-    { id: "bigbluesky", label: "Big Blue Sky" },
-    { id: "scores", label: `Scores (${scores.length})` },
-    { id: "watchlist", label: `Watchlist (${watchlist.length})` },
-  ];
-
+// ============================ SECTORS (context) ============================
+function Sectors({ rows }) {
+  const W = 620, H = 420, P = 44, HI = 30;
+  const x = (v) => P + (v / HI) * (W - 2 * P);
+  const y = (v) => H - P - (v / HI) * (H - 2 * P);
   return (
-    <div style={{ minHeight: "100vh", background: "#0d0d1a",
-      fontFamily: "'Inter', sans-serif", color: "#fff" }}>
-
-      {/* Header */}
-      <div style={{ borderBottom: "1px solid #1a1a2e", padding: "20px 32px",
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        background: "#0a0a18", position: "sticky", top: 0, zIndex: 100 }}>
-        <div>
-          <div style={{ fontSize: 12, color: "#00d4aa", letterSpacing: 0.5, textTransform: "uppercase" }}>
-            Flow Score Tracker
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: "#fff" }}>Market Intelligence Dashboard</div>
-        </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {lastUpdated && (
-            <div style={{ fontSize: 12, color: "#888", marginRight: 8 }}>
-              Updated {lastUpdated.toLocaleTimeString()}
-            </div>
-          )}
-          <button onClick={() => window.open(`${API_BASE}/api/export/scores`, "_blank")} style={btnStyle("#1a1a2e", "#888")}>↓ CSV</button>
-          <button onClick={runBothScanners} disabled={scanningMarket}
-            style={btnStyle(scanningMarket ? "#1a1a2e" : "#7b9fff", scanningMarket ? "#555" : "#000")}>
-            {scanningMarket ? "⟳ Scanning..." : "▶ Run Both Scanners"}
-          </button>
-          <button onClick={runScan} disabled={scanning} style={btnStyle(scanning ? "#1a1a2e" : "#00d4aa", scanning ? "#555" : "#000")}>
-            {scanning ? "Scoring..." : "▶ Score Watchlist"}
-          </button>
-          <button onClick={runDailyScore} disabled={scoringDaily} style={btnStyle(scoringDaily ? "#1a1a2e" : "#7b5ea7", scoringDaily ? "#555" : "#fff")}>
-            {scoringDaily ? "⟳ Scoring..." : "📈 Daily Trend Score"}
-          </button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div style={{ padding: "0 32px", borderBottom: "1px solid #1a1a2e", background: "#0a0a18" }}>
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} style={{
-            background: "none", border: "none", padding: "16px 24px",
-            color: tab === t.id ? "#00d4aa" : "#666", cursor: "pointer",
-            fontSize: 13, letterSpacing: 0.2, textTransform: "uppercase", fontFamily: "'Inter', sans-serif",
-            borderBottom: tab === t.id ? "2px solid #00d4aa" : "2px solid transparent",
-            fontWeight: tab === t.id ? 700 : 400,
-          }}>{t.label}</button>
-        ))}
-      </div>
-
-      <div style={{ padding: 32 }}>
-
-        {/* 50-DAY BREAKOUT SCANNER TAB */}
-        {tab === "breakout" && <ScannerTab
-          scannerType="breakout"
-          watchlistTickers={new Set(watchlist.map(w => w.ticker))}
-          onWatchlistChange={fetchWatchlist}
-        />}
-
-        {/* BIG BLUE SKY SCANNER TAB */}
-        {tab === "bigbluesky" && <ScannerTab
-          scannerType="bigbluesky"
-          watchlistTickers={new Set(watchlist.map(w => w.ticker))}
-          onWatchlistChange={fetchWatchlist}
-        />}
-
-        {/* SCORES TAB — table view */}
-        {tab === "scores" && (
-          <>
-            {loading && (
-              <div style={{ textAlign: "center", color: "#00d4aa", padding: 60, fontSize: 14, letterSpacing: 0 }}>
-                Loading scores...
-              </div>
-            )}
-            {!loading && scores.length === 0 && (
-              <div style={{ textAlign: "center", padding: 80 }}>
-                <div style={{ fontSize: 16, color: "#aaa", marginBottom: 16 }}>No scores yet</div>
-                <div style={{ fontSize: 13, color: "#888", marginBottom: 24 }}>Run a scanner to generate scores</div>
-              </div>
-            )}
-            {scores.length > 0 && (
-              <div>
-                {/* Score distribution summary */}
-                <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-                  {["A", "B", "C", "D", "F"].map(grade => {
-                    const count = scores.filter(s => s.rating === grade).length;
-                    return (
-                      <div key={grade} style={{ display: "flex", alignItems: "center", gap: 8, background: "#0a0a18", border: `1px solid ${gradeColor(grade)}33`, borderRadius: 8, padding: "8px 16px" }}>
-                        <span style={{ fontSize: 12, color: gradeColor(grade), fontWeight: 700 }}>{grade}</span>
-                        <span style={{ fontSize: 22, fontWeight: 900, color: gradeColor(grade), fontFamily: "'Inter', sans-serif" }}>{count}</span>
-                      </div>
-                    );
-                  })}
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 8, padding: "8px 16px", marginLeft: "auto" }}>
-                    <span style={{ fontSize: 12, color: "#666" }}>AVG</span>
-                    <span style={{ fontSize: 22, fontWeight: 900, color: "#aaa", fontFamily: "'Inter', sans-serif" }}>
-                      {Math.round(scores.reduce((sum, s) => sum + (s.flow_score || 0), 0) / scores.length)}
-                    </span>
-                  </div>
-                </div>
-                {/* Table header */}
-                <div style={{
-                  display: "grid",
-                  gridTemplateColumns: "110px 70px 55px 75px 75px 65px 50px 55px 50px",
-                  gap: 6, padding: "10px 16px",
-                  borderBottom: "1px solid #1a1a2e",
-                  fontSize: 10, color: "#666", letterSpacing: 0.2, textTransform: "uppercase"
-                }}>
-                  <div>Ticker</div>
-                  <div>Score</div>
-                  <div>Prev</div>
-                  <div>Wk Jump</div>
-                  <div>Day Jump</div>
-                  <div>Rating</div>
-                  <div style={{ textAlign: "center" }}>CF</div>
-                  <div style={{ textAlign: "center" }}>Trend</div>
-                  <div style={{ textAlign: "center" }}>Mom</div>
-                </div>
-                {scores.map(d => {
-                  const pillars = typeof d.pillars === "string" ? JSON.parse(d.pillars) : (d.pillars || {});
-                  const cf = pillars.capital_flow?.score ?? null;
-                  const tr = pillars.trend?.score ?? null;
-                  const mo = pillars.momentum?.score ?? null;
-                  const rowColor = d.flow_score >= 80 ? "#00ff88"
-                    : d.flow_score >= 70 ? "#7fff7f"
-                    : d.flow_score >= 50 ? "#ffd700"
-                    : d.flow_score >= 30 ? "#ff9944" : "#ff3333";
-
-                  const burst = d.burst || {};
-                  const weekJump = d.week_jump != null ? d.week_jump : burst.score_jump;
-                  const dayJump = d.day_jump;
-                  const prevScore = d.prev_score;
-                  const isBurst = burst.is_burst || (weekJump != null && weekJump >= 15 && d.flow_score >= 65);
-                  const jumpColor = (j) => j > 0 ? "#00ff88" : j < 0 ? "#ff4444" : "#888";
-                  const fmtJump = (j) => j == null ? "—" : j > 0 ? `+${Math.round(j*10)/10}` : `${Math.round(j*10)/10}`;
-                  const isExpanded = selectedTicker === d.ticker;
-
-                  return (
-                    <Fragment key={d.ticker}>
-                      <div style={{
-                        display: "grid",
-                        gridTemplateColumns: "110px 70px 55px 75px 75px 65px 50px 55px 50px",
-                        gap: 6, padding: "12px 16px",
-                        borderBottom: isExpanded ? "none" : "1px solid #0f0f1e",
-                        alignItems: "center",
-                        background: isExpanded ? "#0f0f28" : isBurst ? "rgba(255,200,0,0.04)" : "transparent",
-                        cursor: "pointer",
-                      }}
-                        onClick={() => setSelectedTicker(t => t === d.ticker ? null : d.ticker)}
-                        onMouseEnter={e => { if (!isExpanded) e.currentTarget.style.background = "#0f0f22"; }}
-                        onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = isBurst ? "rgba(255,200,0,0.04)" : "transparent"; }}
-                      >
-                        <div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                            <a href={tvLink(d.ticker)} target="_blank" rel="noreferrer"
-                              onClick={e => e.stopPropagation()}
-                              style={{ fontSize: 14, fontWeight: 900, color: "#00d4aa", textDecoration: "none", fontFamily: "'Inter', sans-serif" }}
-                              onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
-                              onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
-                              {d.ticker}
-                            </a>
-                            {isBurst && <span style={{ fontSize: 8, fontWeight: 800, color: "#ffd700", background: "#ffd70022", padding: "1px 4px", borderRadius: 3, letterSpacing: 0.5 }}>BURST</span>}
-                          </div>
-                          {d.price > 0 && <div style={{ fontSize: 11, color: "#555" }}>${(+d.price).toFixed(2)}</div>}
-                        </div>
-                        <div style={{ fontSize: 20, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: rowColor, fontFamily: "'Inter', sans-serif" }}>
-                          {d.flow_score ?? "—"}
-                        </div>
-                        <div style={{ fontSize: 13, color: "#555", fontVariantNumeric: "tabular-nums" }}>
-                          {prevScore ?? "—"}
-                        </div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: jumpColor(weekJump), fontVariantNumeric: "tabular-nums" }}>
-                          {fmtJump(weekJump)}
-                        </div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: jumpColor(dayJump), fontVariantNumeric: "tabular-nums" }}>
-                          {fmtJump(dayJump)}
-                        </div>
-                        <div style={{ fontSize: 11, color: rowColor, fontWeight: 700 }}>
-                          {d.rating || "—"}
-                        </div>
-                        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: cf != null ? scoreColor(cf) : "#444" }}>{cf ?? "—"}</div>
-                        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: tr != null ? scoreColor(tr) : "#444" }}>{tr != null ? Math.round(tr) : "—"}</div>
-                        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: mo != null ? scoreColor(mo) : "#444" }}>{mo != null ? Math.round(mo) : "—"}</div>
-                      </div>
-                      {isExpanded && (
-                        <div style={{ padding: "16px 24px 20px", background: "#0a0a1e", borderBottom: "1px solid #1a1a2e" }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 24 }}>
-                            <div>
-                              {Object.entries(SIGNAL_LABELS).map(([key, labelText]) => {
-                                const s = pillars[key] || {};
-                                return <SignalBar key={key} label={labelText} score={s.score || 0} detail={s.detail || ""} weight={SIGNAL_WEIGHTS[key]} />;
-                              })}
-                            </div>
-                            <div>
-                              <div style={{ fontSize: 11, color: "#666", letterSpacing: 0.2, textTransform: "uppercase", marginBottom: 8 }}>Score History</div>
-                              <HistoryChart ticker={d.ticker} />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* WATCHLIST TAB */}
-        {tab === "watchlist" && (
-          <div style={{ maxWidth: 600 }}>
-            <div style={{ marginBottom: 24 }}>
-              <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12, letterSpacing: 0 }}>ADD TICKER</div>
-              <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-                <input value={newTicker} onChange={e => setNewTicker(e.target.value.toUpperCase())}
-                  onKeyDown={e => e.key === "Enter" && addTicker()} placeholder="Ticker (e.g. NVDA)"
-                  style={{ flex: 1, background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 6,
-                    padding: "12px 16px", color: "#fff", fontFamily: "'Inter', sans-serif", fontSize: 15, outline: "none" }} />
-                <select value={newSector} onChange={e => setNewSector(e.target.value)}
-                  style={{ flex: 1, background: "#0a0a18", border: "1px solid #1a1a2e", borderRadius: 6,
-                    padding: "12px 16px", color: newSector ? "#fff" : "#888", fontFamily: "'Inter', sans-serif",
-                    fontSize: 15, outline: "none", cursor: "pointer" }}>
-                  <option value="">Sector (optional)</option>
-                  <option value="Energy">Energy</option>
-                  <option value="Technology">Technology</option>
-                  <option value="Healthcare">Healthcare</option>
-                  <option value="Financials">Financials</option>
-                  <option value="Consumer Discretionary">Consumer Discretionary</option>
-                  <option value="Consumer Staples">Consumer Staples</option>
-                  <option value="Industrials">Industrials</option>
-                  <option value="Materials">Materials</option>
-                  <option value="Utilities">Utilities</option>
-                  <option value="Real Estate">Real Estate</option>
-                  <option value="Communication Services">Communication Services</option>
-                </select>
-                <button onClick={addTicker} style={btnStyle("#00d4aa", "#000")}>Add</button>
-              </div>
-            </div>
-            {watchlist.length === 0 && (
-              <div style={{ color: "#888", fontSize: 14, padding: "32px 0" }}>No tickers yet.</div>
-            )}
-            {watchlist.map(w => {
-              const scoreData = scores.find(s => s.ticker === w.ticker);
+    <section>
+      <div className="sub">Where the wind is blowing. Only hunt stocks in sectors up and to the right — the leaders.</div>
+      <div className="cur">
+        <div className="field">
+          <svg viewBox={`0 0 ${W} ${H}`}>
+            <rect x={x(15)} y={P} width={W - P - x(15)} height={y(15) - P} fill="#e89b3c08" />
+            {[0, 5, 10, 15, 20, 25, 30].map((v) => (
+              <g key={v}>
+                <line x1={x(v)} y1={P} x2={x(v)} y2={H - P} stroke="#ffffff08" />
+                <line x1={P} y1={y(v)} x2={W - P} y2={y(v)} stroke="#ffffff08" />
+              </g>
+            ))}
+            <line x1={x(15)} y1={P} x2={x(15)} y2={H - P} stroke="#ffffff20" strokeDasharray="3 4" />
+            <line x1={P} y1={y(15)} x2={W - P} y2={y(15)} stroke="#ffffff20" strokeDasharray="3 4" />
+            <text className="qlabel" x={W - P - 4} y={P + 14} textAnchor="end">LEADING</text>
+            <text className="qlabel" x={P + 4} y={P + 14}>IMPROVING</text>
+            <text className="qlabel" x={W - P - 4} y={H - P - 6} textAnchor="end">WEAKENING</text>
+            <text className="qlabel" x={P + 4} y={H - P - 6}>LAGGING</text>
+            <text className="qlabel" x={W / 2} y={H - 12} textAnchor="middle" fill="#5C7184">TREND</text>
+            <text className="qlabel" x={14} y={H / 2} transform={`rotate(-90 14 ${H / 2})`} textAnchor="middle" fill="#5C7184">MOMENTUM</text>
+            {rows.map((s) => {
+              const r = 6 + (s.cf / 40) * 12, col = thermal(s.score);
               return (
-                <div key={w.ticker} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "14px 16px", background: "#0a0a18", border: "1px solid #1a1a2e",
-                  borderRadius: 6, marginBottom: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                    {scoreData && (
-                      <div style={{ textAlign: "center", minWidth: 44 }}>
-                        <div style={{ fontSize: 22, fontWeight: 900, color: scoreColor(scoreData.flow_score), fontFamily: "'Inter', sans-serif", lineHeight: 1 }}>
-                          {Math.round(scoreData.flow_score)}
-                        </div>
-                        <div style={{ fontSize: 11, color: gradeColor(scoreData.rating), fontWeight: 700, marginTop: 2 }}>
-                          {scoreData.rating}
-                        </div>
-                      </div>
-                    )}
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <a href={tvLink(w.ticker)} target="_blank" rel="noreferrer"
-                          style={{ fontSize: 17, fontWeight: 700, color: "#00d4aa", fontFamily: "'Inter', sans-serif",
-                            textDecoration: "none" }}
-                          onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
-                          onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
-                          {w.ticker} ↗
-                        </a>
-                        {scoreData?.label && (
-                          <span style={{ fontSize: 11, color: gradeColor(scoreData.rating), background: `${gradeColor(scoreData.rating)}22`, padding: "2px 7px", borderRadius: 4, fontWeight: 700 }}>
-                            {scoreData.label}
-                          </span>
-                        )}
-                      </div>
-                      {w.sector && <div style={{ fontSize: 13, color: "#555", marginTop: 2 }}>{w.sector}</div>}
-                    </div>
-                  </div>
-                  <button onClick={() => removeTicker(w.ticker)}
-                    style={{ background: "none", border: "1px solid #2a1a1a", borderRadius: 4, color: "#ff4444", cursor: "pointer", padding: "4px 12px", fontSize: 13 }}>
-                    Remove
-                  </button>
-                </div>
+                <g key={s.sector}>
+                  <circle cx={x(s.trend)} cy={y(s.mom)} r={r + 6} fill={col} opacity="0.1" />
+                  <circle cx={x(s.trend)} cy={y(s.mom)} r={r} fill={col} stroke="#0c1722" strokeWidth="1.5" />
+                  <text x={x(s.trend)} y={y(s.mom) + 3.5} textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="9.5" fontWeight="600" fill={inkfor(s.score)}>{s.etf}</text>
+                </g>
               );
             })}
-          </div>
-        )}
+          </svg>
+        </div>
+        <div className="ladder">
+          {rows.map((s, i) => (
+            <div className="lrow" key={s.sector}>
+              <div className="rk mono">{String(i + 1).padStart(2, "0")}</div>
+              <div className="nm"><b>{s.sector}</b><span className="etf">{s.etf}</span></div>
+              <div className="rt">
+                <Bars cf={s.cf} trend={s.trend} mom={s.mom} />
+                <div className="sc" style={{ color: thermal(s.score) }}>{s.score}</div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
