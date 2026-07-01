@@ -949,8 +949,10 @@ def ts_check():
         if r.status_code != 200:
             out["token_refresh"]["body"] = r.text[:300]
             return jsonify(out)
-        access = r.json().get("access_token")
+        tok = r.json()
+        access = tok.get("access_token")
         out["token_refresh"]["got_access_token"] = bool(access)
+        out["token_refresh"]["granted_scope"] = tok.get("scope")
     except Exception as e:
         out["token_refresh"] = {"error": str(e)[:200]}
         return jsonify(out)
